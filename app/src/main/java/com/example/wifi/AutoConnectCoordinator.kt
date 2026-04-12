@@ -26,12 +26,16 @@ class AutoConnectCoordinator(
 
         val scan = scanner.scanOpenNetworks()
         val networks = scan.getOrElse {
+            val errorMsg = "Scan failed: ${it.message ?: "unknown error"}"
+            ScanLogManager.log(errorMsg)
             return BackgroundAutoConnectState(
                 isRunning = true,
                 attempts = previousAttempts,
-                message = "Scan failed: ${it.message ?: "unknown error"}"
+                message = errorMsg
             )
         }
+
+        ScanLogManager.log("Background scan found ${networks.size} open networks.")
 
         if (networks.isEmpty()) {
             return BackgroundAutoConnectState(
@@ -48,6 +52,9 @@ class AutoConnectCoordinator(
             }
 
             attempts += 1
+            val logMessage = "Trying ${network.ssid}..."
+            ScanLogManager.log(logMessage)
+
             onUpdate(
                 BackgroundAutoConnectState(
                     isRunning = true,
@@ -61,6 +68,7 @@ class AutoConnectCoordinator(
                 ConnectAttemptResult.Connected -> {
                     val validated = waitForValidatedInternet(stopSignal)
                     if (validated) {
+                        ScanLogManager.log("Connected to ${network.ssid} with validated internet.")
                         return BackgroundAutoConnectState(
                             isRunning = true,
                             currentSsid = network.ssid,
@@ -73,6 +81,7 @@ class AutoConnectCoordinator(
                     val portalDetected = captivePortalChecker.getStatus() == CaptivePortalStatus.CAPTIVE_PORTAL
                     connector.disconnectCurrentNetwork()
                     if (portalDetected) {
+                        ScanLogManager.log("Captive portal detected on ${network.ssid}.")
                         return BackgroundAutoConnectState(
                             isRunning = true,
                             currentSsid = network.ssid,
@@ -80,10 +89,13 @@ class AutoConnectCoordinator(
                             captivePortalDetected = true,
                             message = "Captive portal detected on ${network.ssid}. Trying next network."
                         )
+                    } else {
+                        ScanLogManager.log("No internet on ${network.ssid}, disconnected.")
                     }
                 }
 
                 is ConnectAttemptResult.Failed -> {
+                    ScanLogManager.log("Failed to connect to ${network.ssid}: ${connect.reason}")
                     onUpdate(
                         BackgroundAutoConnectState(
                             isRunning = true,
@@ -95,6 +107,7 @@ class AutoConnectCoordinator(
                 }
 
                 is ConnectAttemptResult.Unsupported -> {
+                    ScanLogManager.log("Unsupported connection to ${network.ssid}: ${connect.reason}")
                     return BackgroundAutoConnectState(
                         isRunning = false,
                         attempts = attempts,
@@ -125,4 +138,3 @@ class AutoConnectCoordinator(
         return false
     }
 }
-

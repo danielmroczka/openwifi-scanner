@@ -60,6 +60,7 @@ class WifiViewModel(
                             statusMessage = if (networks.isEmpty()) "No open networks found." else null
                         )
                     }
+                    ScanLogManager.log("Scanned ${networks.size} open networks.")
                 }
                 .onFailure { error ->
                     _uiState.update {
@@ -68,6 +69,7 @@ class WifiViewModel(
                             statusMessage = error.message ?: "Scan failed."
                         )
                     }
+                    ScanLogManager.log("Scan failed: ${error.message}")
                 }
         }
     }
@@ -143,4 +145,3 @@ class WifiViewModelFactory(
         return WifiViewModel(scanner, connector, captivePortalChecker, autoConnectStateSource) as T
     }
 }
-

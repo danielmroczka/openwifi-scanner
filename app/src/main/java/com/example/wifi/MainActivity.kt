@@ -25,6 +25,8 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -39,7 +41,9 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.core.content.PermissionChecker
+import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.launch
 import com.example.wifi.ui.theme.WIFITheme
 
 class MainActivity : ComponentActivity() {
@@ -58,7 +62,9 @@ class MainActivity : ComponentActivity() {
                 )
                 val captivePortalResolver = remember { AndroidCaptivePortalResolver(applicationContext) }
                 val state by vm.uiState.collectAsState()
+                val logs by ScanLogManager.logs.collectAsState()
                 var hasPermissions by remember { mutableStateOf(hasRequiredPermissions()) }
+                var selectedTabIndex by remember { mutableStateOf(0) }
 
                 val permissionsLauncher = rememberLauncherForActivityResult(
                     contract = ActivityResultContracts.RequestMultiplePermissions()
@@ -74,19 +80,40 @@ class MainActivity : ComponentActivity() {
                 }
 
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    WifiScreen(
-                        state = state,
-                        hasPermissions = hasPermissions,
-                        onRequestPermissions = {
-                            permissionsLauncher.launch(requiredPermissions())
-                        },
-                        onScan = vm::scanOpenNetworks,
-                        onConnect = vm::connectToNetwork,
-                        onStartAutoConnect = { AutoConnectService.start(this@MainActivity) },
-                        onStopAutoConnect = { AutoConnectService.stop(this@MainActivity) },
-                        onResolvePortal = captivePortalResolver::resolve,
-                        modifier = Modifier.padding(innerPadding)
-                    )
+                    Column(modifier = Modifier.padding(innerPadding)) {
+                        TabRow(selectedTabIndex = selectedTabIndex) {
+                            Tab(selected = selectedTabIndex == 0, onClick = { selectedTabIndex = 0 }) {
+                                Text("Scanner", modifier = Modifier.padding(16.dp))
+                            }
+                            Tab(selected = selectedTabIndex == 1, onClick = { selectedTabIndex = 1 }) {
+                                Text("Logs", modifier = Modifier.padding(16.dp))
+                            }
+                        }
+                        
+                        if (selectedTabIndex == 0) {
+                            WifiScreen(
+                                state = state,
+                                hasPermissions = hasPermissions,
+                                onRequestPermissions = {
+                                    permissionsLauncher.launch(requiredPermissions())
+                                },
+                                onScan = vm::scanOpenNetworks,
+                                onConnect = vm::connectToNetwork,
+                                onStartAutoConnect = { AutoConnectService.start(this@MainActivity) },
+                                onStopAutoConnect = { AutoConnectService.stop(this@MainActivity) },
+                                onResolvePortal = captivePortalResolver::resolve,
+                                modifier = Modifier.weight(1f)
+                            )
+                        } else {
+                            LogsScreen(
+                                logs = logs,
+                                onClearLogs = {
+                                    ScanLogManager.clearLogs()
+                                },
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -194,6 +221,48 @@ fun WifiScreen(
                         Text(text = network.ssid, style = MaterialTheme.typography.titleMedium)
                         Text(text = "Signal: ${network.level} dBm")
                         Text(text = "Tap to connect")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun LogsScreen(
+    logs: List<ScanLog>,
+    onClearLogs: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(modifier = modifier.fillMaxSize().padding(16.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+        ) {
+            Text("Scan Logs", style = MaterialTheme.typography.headlineSmall)
+            Button(onClick = onClearLogs) {
+                Text("Clear")
+            }
+        }
+        
+        LazyColumn(
+            modifier = Modifier.weight(1f).padding(top = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            if (logs.isEmpty()) {
+                item {
+                    Text("No logs yet.")
+                }
+            }
+            items(logs) { log ->
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(8.dp)) {
+                        Text(
+                            text = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date(log.timestamp)),
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        Text(text = log.message, style = MaterialTheme.typography.bodyMedium)
                     }
                 }
             }

@@ -30,10 +30,20 @@ class AutoConnectService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+
         scanner = AndroidWifiScanner(applicationContext)
         connector = AndroidWifiConnector(applicationContext)
         checker = AndroidCaptivePortalChecker(applicationContext)
-        coordinator = AutoConnectCoordinator(scanner, connector, checker)
+
+        coordinator = AutoConnectCoordinator(
+            scanner,
+            connector,
+            checker
+        )
+
+        serviceScope.launch {
+            AutoConnectRuntime.update(BackgroundAutoConnectState(isRunning = true, message = "Service started."))
+        }
         ensureNotificationChannel()
     }
 
@@ -46,7 +56,12 @@ class AutoConnectService : Service() {
     }
 
     override fun onDestroy() {
-        stopAutoConnect()
+        shouldRun = false
+        autoJob?.cancel()
+        if (::connector.isInitialized) {
+            connector.disconnectCurrentNetwork()
+        }
+        AutoConnectRuntime.reset()
         serviceScope.cancel()
         super.onDestroy()
     }
@@ -112,12 +127,19 @@ class AutoConnectService : Service() {
     }
 
     private fun stopAutoConnect() {
+        if (!shouldRun) return
         shouldRun = false
         autoJob?.cancel()
         autoJob = null
-        connector.disconnectCurrentNetwork()
+        if (::connector.isInitialized) {
+            connector.disconnectCurrentNetwork()
+        }
         AutoConnectRuntime.reset()
-        stopForeground(STOP_FOREGROUND_REMOVE)
+        try {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
         stopSelf()
     }
 
@@ -168,11 +190,8 @@ class AutoConnectService : Service() {
         }
 
         fun stop(context: Context) {
-            val intent = Intent(context, AutoConnectService::class.java).apply {
-                action = ACTION_STOP
-            }
-            context.startService(intent)
+            val intent = Intent(context, AutoConnectService::class.java)
+            context.stopService(intent)
         }
     }
 }
-

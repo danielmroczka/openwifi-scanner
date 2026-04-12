@@ -1,26 +1,36 @@
-# WIFI app
+# Open WiFi Scanner
 
-This Android app scans nearby **open Wi-Fi** networks, lets the user tap to connect, and then checks whether a captive portal (sign-in/captcha page) is required.
+Android app that scans nearby **open Wi-Fi** networks, auto-connects, detects captive portals, and manages trusted/blocked networks by BSSID.
 
-## What it does
+## Features
 
-- Requests required runtime permissions for Wi-Fi scan/connect.
-- Scans and lists open SSIDs.
-- Connects to selected open SSID on Android 10+ using `WifiNetworkSpecifier`.
-- Checks network capabilities for captive portal status.
-- Shows a **Resolve Captive Portal** button that first tries Android system captive portal UI, then falls back to browser.
-- Starts a foreground background-service after app launch (when permissions are granted) and keeps trying open networks until internet is validated.
-- If connected network has no validated internet, it disconnects and retries the next open network.
+- **Auto-connect** — foreground service continuously scans open networks and connects to the best available one.
+- **Blacklist / Whitelist** — manage networks by BSSID (not just SSID), so the same network name at different locations is tracked separately.
+  - *Whitelisted* networks are auto-connected without prompting.
+  - *Blacklisted* networks are skipped by the scanner.
+- **GPS location** — captures coordinates when a network is added to a list, so you can see where it was first encountered.
+- **Captive portal detection** — checks for sign-in pages and offers a button to open the portal UI.
+- **Scan logs** — in-memory log of scan activity and connection attempts (cleared on app close).
+- **4-tab UI** — Scanner, Whitelist, Blacklist, Logs.
+
+## Tech stack
+
+- Kotlin, Jetpack Compose, Material 3
+- Room (KSP) for persistent blacklist/whitelist storage
+- Foreground service for background auto-connect
+- `WifiNetworkSuggestion` (silent) with `WifiNetworkSpecifier` fallback (Android 10+)
+
+## Permissions
+
+`ACCESS_FINE_LOCATION`, `ACCESS_WIFI_STATE`, `CHANGE_WIFI_STATE`, `NEARBY_WIFI_DEVICES` (API 33+), `POST_NOTIFICATIONS` (API 33+), `FOREGROUND_SERVICE`
+
+## Build & Test
+
+```powershell
+.\gradlew.bat assembleDebug --no-daemon
+.\gradlew.bat testDebugUnitTest --no-daemon
+```
 
 ## Important limitation
 
 The app does **not** bypass or auto-solve captchas. It only opens the sign-in page so the user can complete it.
-
-## Test
-
-Run unit tests:
-
-```powershell
-.\gradlew.bat testDebugUnitTest --no-daemon
-```
-

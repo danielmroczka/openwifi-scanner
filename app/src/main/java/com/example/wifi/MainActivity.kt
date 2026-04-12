@@ -5,7 +5,6 @@ import android.content.Intent
 import android.os.Bundle
 import android.os.Build
 import android.provider.Settings
-import android.net.Uri
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -14,6 +13,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -49,6 +49,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.core.content.PermissionChecker
+import androidx.core.net.toUri
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.wifi.data.AppDatabase
 import com.example.wifi.data.RoomWifiNetworkRepository
@@ -205,7 +206,7 @@ fun WifiScreen(
             Button(
                 onClick = {
                     context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                        data = Uri.parse("package:${context.packageName}")
+                        data = "package:${context.packageName}".toUri()
                     })
                 }
             ) {
@@ -348,7 +349,7 @@ fun WifiScreen(
                             Button(
                                 onClick = { onToggleWhitelist(network.bssid, network.ssid) },
                                 modifier = Modifier.size(height = 32.dp, width = 100.dp),
-                                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
                             ) {
                                 Text(
                                     if (isWhitelisted) "Unfavourite" else "Favourite",
@@ -358,7 +359,7 @@ fun WifiScreen(
                             Button(
                                 onClick = { onToggleBlacklist(network.bssid, network.ssid) },
                                 modifier = Modifier.size(height = 32.dp, width = 100.dp),
-                                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
                             ) {
                                 Text(
                                     if (isBlacklisted) "Unblock" else "Block",
@@ -464,7 +465,7 @@ fun NetworkListScreen(
 
                         if (network.latitude != null && network.longitude != null) {
                             Text(
-                                text = "📍 ${String.format("%.5f", network.latitude)}, ${String.format("%.5f", network.longitude)}",
+                                text = "📍 ${String.format(java.util.Locale.US, "%.5f", network.latitude)}, ${String.format(java.util.Locale.US, "%.5f", network.longitude)}",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.primary
                             )
@@ -483,7 +484,7 @@ fun NetworkListScreen(
                             Button(
                                 onClick = { onRemove(network) },
                                 modifier = Modifier.weight(1f),
-                                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
                             ) {
                                 Text("Remove from list", style = MaterialTheme.typography.labelSmall)
                             }
@@ -493,7 +494,7 @@ fun NetworkListScreen(
                                 colors = ButtonDefaults.buttonColors(
                                     containerColor = MaterialTheme.colorScheme.error
                                 ),
-                                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
                             ) {
                                 Text("Delete", style = MaterialTheme.typography.labelSmall)
                             }

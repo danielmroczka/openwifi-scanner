@@ -9,6 +9,8 @@ import android.content.Intent
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import com.example.wifi.data.AppDatabase
+import com.example.wifi.data.RoomWifiNetworkRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -17,47 +19,32 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import com.example.wifi.data.AppDatabase
-import com.example.wifi.data.RoomWifiNetworkRepository
-import com.example.wifi.data.WifiNetworkRepository
 
 class AutoConnectService : Service() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var autoJob: Job? = null
     private var shouldRun: Boolean = false
 
-    private lateinit var scanner: WifiScanner
     private lateinit var connector: WifiConnector
     private lateinit var checker: CaptivePortalChecker
     private lateinit var coordinator: AutoConnectCoordinator
-    private lateinit var repository: WifiNetworkRepository
 
     override fun onCreate() {
         super.onCreate()
 
-        scanner = AndroidWifiScanner(applicationContext)
+        val scanner = AndroidWifiScanner(applicationContext)
         connector = AndroidWifiConnector(applicationContext)
         checker = AndroidCaptivePortalChecker(applicationContext)
-        repository = RoomWifiNetworkRepository(AppDatabase.getDatabase(applicationContext).wifiNetworkDao())
+        val repository = RoomWifiNetworkRepository(AppDatabase.getDatabase(applicationContext).wifiNetworkDao())
 
-        coordinator = AutoConnectCoordinator(
-            scanner,
-            connector,
-            checker,
-            repository
-        )
+        coordinator = AutoConnectCoordinator(scanner, connector, checker, repository)
 
-        serviceScope.launch {
-            AutoConnectRuntime.update(BackgroundAutoConnectState(isRunning = true, message = "Service started."))
-        }
+        AutoConnectRuntime.update(BackgroundAutoConnectState(isRunning = true, message = "Service started."))
         ensureNotificationChannel()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
-            ACTION_STOP -> stopAutoConnect()
-            else -> startAutoConnect()
-        }
+        startAutoConnect()
         return START_STICKY
     }
 
@@ -75,9 +62,7 @@ class AutoConnectService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     private fun startAutoConnect() {
-        if (autoJob?.isActive == true) {
-            return
-        }
+        if (autoJob?.isActive == true) return
 
         shouldRun = true
         startForeground(NOTIFICATION_ID, buildNotification("Auto-connect started"))
@@ -100,7 +85,8 @@ class AutoConnectService : Service() {
                         delay(2_000)
                     }
                 } else {
-                    when (checker.getStatus()) {
+                    val status = checker.getStatus()
+                    when (status) {
                         CaptivePortalStatus.OPEN_INTERNET -> {
                             pushState(
                                 BackgroundAutoConnectState(
@@ -112,7 +98,6 @@ class AutoConnectService : Service() {
                                 )
                             )
                         }
-
                         else -> {
                             connector.disconnectCurrentNetwork()
                             connected = false
@@ -120,7 +105,7 @@ class AutoConnectService : Service() {
                                 BackgroundAutoConnectState(
                                     isRunning = true,
                                     attempts = attempts,
-                                    captivePortalDetected = checker.getStatus() == CaptivePortalStatus.CAPTIVE_PORTAL,
+                                    captivePortalDetected = status == CaptivePortalStatus.CAPTIVE_PORTAL,
                                     message = "Internet lost. Trying next open network..."
                                 )
                             )
@@ -132,34 +117,14 @@ class AutoConnectService : Service() {
         }
     }
 
-    private fun stopAutoConnect() {
-        if (!shouldRun) return
-        shouldRun = false
-        autoJob?.cancel()
-        autoJob = null
-        if (::connector.isInitialized) {
-            connector.disconnectCurrentNetwork()
-        }
-        AutoConnectRuntime.reset()
-        try {
-            stopForeground(STOP_FOREGROUND_REMOVE)
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-        stopSelf()
-    }
-
     private fun pushState(state: BackgroundAutoConnectState) {
         AutoConnectRuntime.update(state)
-        val text = state.message
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        manager.notify(NOTIFICATION_ID, buildNotification(text))
+        manager.notify(NOTIFICATION_ID, buildNotification(state.message))
     }
 
     private fun ensureNotificationChannel() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
-            return
-        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val channel = NotificationChannel(
             CHANNEL_ID,
             getString(R.string.auto_connect_channel_name),
@@ -181,13 +146,9 @@ class AutoConnectService : Service() {
     companion object {
         private const val CHANNEL_ID = "auto_connect_channel"
         private const val NOTIFICATION_ID = 88
-        private const val ACTION_START = "com.example.wifi.action.START_AUTO_CONNECT"
-        private const val ACTION_STOP = "com.example.wifi.action.STOP_AUTO_CONNECT"
 
         fun start(context: Context) {
-            val intent = Intent(context, AutoConnectService::class.java).apply {
-                action = ACTION_START
-            }
+            val intent = Intent(context, AutoConnectService::class.java)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 context.startForegroundService(intent)
             } else {
@@ -196,8 +157,7 @@ class AutoConnectService : Service() {
         }
 
         fun stop(context: Context) {
-            val intent = Intent(context, AutoConnectService::class.java)
-            context.stopService(intent)
+            context.stopService(Intent(context, AutoConnectService::class.java))
         }
     }
 }

@@ -8,7 +8,6 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
-import android.net.Uri
 import android.net.wifi.ScanResult
 import android.net.wifi.WifiManager
 import android.net.wifi.WifiNetworkSpecifier
@@ -16,12 +15,14 @@ import android.net.wifi.WifiNetworkSuggestion
 import android.os.Build
 import android.provider.Settings
 import androidx.annotation.RequiresPermission
+import androidx.core.net.toUri
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
 
-class AndroidWifiScanner(private val context: Context) : WifiScanner {
+@Suppress("DEPRECATION")
+class AndroidWifiScanner(context: Context) : WifiScanner {
     private val wifiManager: WifiManager =
         context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
 
@@ -55,7 +56,8 @@ class AndroidWifiScanner(private val context: Context) : WifiScanner {
     }
 }
 
-class AndroidWifiConnector(private val context: Context) : WifiConnector {
+@SuppressLint("NewApi")
+class AndroidWifiConnector(context: Context) : WifiConnector {
     private val connectivityManager: ConnectivityManager =
         context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
     private val wifiManager: WifiManager =
@@ -92,7 +94,7 @@ class AndroidWifiConnector(private val context: Context) : WifiConnector {
             ScanLogManager.log("Suggestion added for $ssid, waiting for system to connect...")
 
             // Wait for the system to pick up the suggestion and connect
-            val connected = waitForConnection(ssid)
+            val connected = waitForConnection()
             if (connected) {
                 return ConnectAttemptResult.Connected
             }
@@ -107,7 +109,7 @@ class AndroidWifiConnector(private val context: Context) : WifiConnector {
         return connectViaSpecifier(ssid)
     }
 
-    private suspend fun waitForConnection(ssid: String): Boolean {
+    private suspend fun waitForConnection(): Boolean {
         // Give the system time to auto-connect via the suggestion
         repeat(10) {
             delay(2_000)
@@ -228,7 +230,7 @@ class AndroidCaptivePortalResolver(context: Context) : CaptivePortalResolver {
 
         val fallbackIntent = Intent(
             Intent.ACTION_VIEW,
-            Uri.parse("http://connectivitycheck.gstatic.com/generate_204")
+            "http://connectivitycheck.gstatic.com/generate_204".toUri()
         ).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }

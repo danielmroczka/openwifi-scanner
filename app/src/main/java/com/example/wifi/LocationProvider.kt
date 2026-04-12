@@ -35,7 +35,7 @@ object LocationProvider {
 
         return providers
             .mapNotNull { runCatching { locationManager.getLastKnownLocation(it) }.getOrNull() }
-            .maxByOrNull { it.accuracy }
+            .minByOrNull { it.accuracy }
     }
 }
 

@@ -17,6 +17,9 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import com.example.wifi.data.AppDatabase
+import com.example.wifi.data.RoomWifiNetworkRepository
+import com.example.wifi.data.WifiNetworkRepository
 
 class AutoConnectService : Service() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -27,6 +30,7 @@ class AutoConnectService : Service() {
     private lateinit var connector: WifiConnector
     private lateinit var checker: CaptivePortalChecker
     private lateinit var coordinator: AutoConnectCoordinator
+    private lateinit var repository: WifiNetworkRepository
 
     override fun onCreate() {
         super.onCreate()
@@ -34,11 +38,13 @@ class AutoConnectService : Service() {
         scanner = AndroidWifiScanner(applicationContext)
         connector = AndroidWifiConnector(applicationContext)
         checker = AndroidCaptivePortalChecker(applicationContext)
+        repository = RoomWifiNetworkRepository(AppDatabase.getDatabase(applicationContext).wifiNetworkDao())
 
         coordinator = AutoConnectCoordinator(
             scanner,
             connector,
-            checker
+            checker,
+            repository
         )
 
         serviceScope.launch {

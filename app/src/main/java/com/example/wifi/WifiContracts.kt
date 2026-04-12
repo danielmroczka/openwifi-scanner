@@ -4,6 +4,7 @@ import kotlinx.coroutines.flow.StateFlow
 
 data class WifiNetwork(
     val ssid: String,
+    val bssid: String,
     val capabilities: String,
     val level: Int
 )

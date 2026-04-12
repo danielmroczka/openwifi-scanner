@@ -12,9 +12,11 @@ import android.net.Uri
 import android.net.wifi.ScanResult
 import android.net.wifi.WifiManager
 import android.net.wifi.WifiNetworkSpecifier
+import android.net.wifi.WifiNetworkSuggestion
 import android.os.Build
 import android.provider.Settings
 import androidx.annotation.RequiresPermission
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
@@ -35,8 +37,8 @@ class AndroidWifiScanner(private val context: Context) : WifiScanner {
             .asSequence()
             .filter { it.SSID.isNotBlank() }
             .filter { it.isOpenNetwork() }
-            .map { WifiNetwork(ssid = it.SSID, capabilities = it.capabilities, level = it.level) }
-            .distinctBy { it.ssid }
+            .map { WifiNetwork(ssid = it.SSID, bssid = it.BSSID, capabilities = it.capabilities, level = it.level) }
+            .distinctBy { it.bssid }
             .sortedByDescending { it.level }
             .toList()
 
@@ -56,7 +58,10 @@ class AndroidWifiScanner(private val context: Context) : WifiScanner {
 class AndroidWifiConnector(private val context: Context) : WifiConnector {
     private val connectivityManager: ConnectivityManager =
         context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+    private val wifiManager: WifiManager =
+        context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
     private var activeCallback: ConnectivityManager.NetworkCallback? = null
+    private var activeSuggestions: List<WifiNetworkSuggestion> = emptyList()
 
     @RequiresPermission(anyOf = [Manifest.permission.CHANGE_WIFI_STATE, Manifest.permission.NEARBY_WIFI_DEVICES])
     override suspend fun connectToOpenNetwork(ssid: String): ConnectAttemptResult {
@@ -68,6 +73,55 @@ class AndroidWifiConnector(private val context: Context) : WifiConnector {
             )
         }
 
+        // Try suggestion-based approach first (no user dialog for open networks)
+        val suggestion = WifiNetworkSuggestion.Builder()
+            .setSsid(ssid)
+            .setIsAppInteractionRequired(false)
+            .build()
+
+        val suggestions = listOf(suggestion)
+
+        // Remove any previously added suggestions
+        if (activeSuggestions.isNotEmpty()) {
+            wifiManager.removeNetworkSuggestions(activeSuggestions)
+        }
+
+        val status = wifiManager.addNetworkSuggestions(suggestions)
+        if (status == WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS) {
+            activeSuggestions = suggestions
+            ScanLogManager.log("Suggestion added for $ssid, waiting for system to connect...")
+
+            // Wait for the system to pick up the suggestion and connect
+            val connected = waitForConnection(ssid)
+            if (connected) {
+                return ConnectAttemptResult.Connected
+            }
+
+            // Suggestion was accepted but system didn't connect in time
+            ScanLogManager.log("Suggestion for $ssid accepted but system did not connect. Trying specifier...")
+        } else {
+            ScanLogManager.log("Suggestion for $ssid failed (status=$status). Trying specifier...")
+        }
+
+        // Fallback: WifiNetworkSpecifier (shows system dialog)
+        return connectViaSpecifier(ssid)
+    }
+
+    private suspend fun waitForConnection(ssid: String): Boolean {
+        // Give the system time to auto-connect via the suggestion
+        repeat(10) {
+            delay(2_000)
+            val activeNetwork = connectivityManager.activeNetwork ?: return@repeat
+            val caps = connectivityManager.getNetworkCapabilities(activeNetwork) ?: return@repeat
+            if (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
+                connectivityManager.bindProcessToNetwork(activeNetwork)
+                return true
+            }
+        }
+        return false
+    }
+
+    private suspend fun connectViaSpecifier(ssid: String): ConnectAttemptResult {
         val specifier = WifiNetworkSpecifier.Builder()
             .setSsid(ssid)
             .build()
@@ -130,6 +184,10 @@ class AndroidWifiConnector(private val context: Context) : WifiConnector {
             runCatching { connectivityManager.unregisterNetworkCallback(callback) }
         }
         activeCallback = null
+        if (activeSuggestions.isNotEmpty()) {
+            runCatching { wifiManager.removeNetworkSuggestions(activeSuggestions) }
+            activeSuggestions = emptyList()
+        }
     }
 }
 

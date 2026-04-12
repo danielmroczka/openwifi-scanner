@@ -1,11 +1,13 @@
 package com.example.wifi
 
+import com.example.wifi.data.WifiNetworkRepository
 import kotlinx.coroutines.delay
 
 class AutoConnectCoordinator(
     private val scanner: WifiScanner,
     private val connector: WifiConnector,
-    private val captivePortalChecker: CaptivePortalChecker
+    private val captivePortalChecker: CaptivePortalChecker,
+    private val repository: WifiNetworkRepository? = null
 ) {
     suspend fun connectNextOpenNetworkCycle(
         stopSignal: () -> Boolean,
@@ -25,7 +27,7 @@ class AutoConnectCoordinator(
         )
 
         val scan = scanner.scanOpenNetworks()
-        val networks = scan.getOrElse {
+        val allNetworks = scan.getOrElse {
             val errorMsg = "Scan failed: ${it.message ?: "unknown error"}"
             ScanLogManager.log(errorMsg)
             return BackgroundAutoConnectState(
@@ -35,7 +37,20 @@ class AutoConnectCoordinator(
             )
         }
 
-        ScanLogManager.log("Background scan found ${networks.size} open networks.")
+        ScanLogManager.log("Background scan found ${allNetworks.size} open networks.")
+
+        // Filter out blacklisted and prioritise whitelisted networks
+        val networks = if (repository != null) {
+            val blacklisted = repository.getBlacklistedNetworks().map { it.bssid }.toSet()
+            val whitelisted = repository.getWhitelistedNetworks().map { it.bssid }.toSet()
+            val filtered = allNetworks.filter { it.bssid !in blacklisted }
+            if (filtered.size < allNetworks.size) {
+                ScanLogManager.log("Filtered out ${allNetworks.size - filtered.size} blacklisted network(s).")
+            }
+            filtered.sortedByDescending { it.bssid in whitelisted }
+        } else {
+            allNetworks
+        }
 
         if (networks.isEmpty()) {
             return BackgroundAutoConnectState(

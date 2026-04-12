@@ -5,7 +5,8 @@ import androidx.room.PrimaryKey
 
 @Entity(tableName = "wifi_networks")
 data class WifiNetworkEntity(
-    @PrimaryKey val ssid: String,
+    @PrimaryKey val bssid: String,
+    val ssid: String,
     val isBlacklisted: Boolean = false,
     val isWhitelisted: Boolean = false,
     val dateAdded: Long = System.currentTimeMillis(),

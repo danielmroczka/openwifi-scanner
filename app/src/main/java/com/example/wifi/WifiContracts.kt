@@ -34,9 +34,6 @@ interface CaptivePortalChecker {
     fun getStatus(): CaptivePortalStatus
 }
 
-interface CaptivePortalResolver {
-    fun resolve()
-}
 
 data class BackgroundAutoConnectState(
     val isRunning: Boolean = false,

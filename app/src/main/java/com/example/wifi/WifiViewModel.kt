@@ -28,7 +28,8 @@ data class WifiUiState(
     val blacklistedBssids: Set<String> = emptySet(),
     val whitelistedBssids: Set<String> = emptySet(),
     val blacklistedNetworks: List<WifiNetworkEntity> = emptyList(),
-    val whitelistedNetworks: List<WifiNetworkEntity> = emptyList()
+    val whitelistedNetworks: List<WifiNetworkEntity> = emptyList(),
+    val pendingApproval: PendingNetworkApproval? = null
 )
 
 class WifiViewModel(
@@ -59,6 +60,11 @@ class WifiViewModel(
                         needsPortalLogin = it.needsPortalLogin || autoState.captivePortalDetected
                     )
                 }
+            }
+        }
+        viewModelScope.launch {
+            NetworkApprovalManager.pending.collect { pending ->
+                _uiState.update { it.copy(pendingApproval = pending) }
             }
         }
         refreshLists()
@@ -170,6 +176,25 @@ class WifiViewModel(
                     }
                 }
             }
+        }
+    }
+
+    fun handleApprovalDecision(decision: UserNetworkDecision) {
+        viewModelScope.launch {
+            val pending = NetworkApprovalManager.pending.value ?: return@launch
+            val repo = repository
+            val location = appContext?.let { LocationProvider.getLastKnownLocation(it) }
+            when (decision) {
+                UserNetworkDecision.WHITELIST -> {
+                    repo?.setWhitelisted(pending.bssid, pending.ssid, true, location?.latitude, location?.longitude)
+                }
+                UserNetworkDecision.BLACKLIST -> {
+                    repo?.setBlacklisted(pending.bssid, pending.ssid, true, location?.latitude, location?.longitude)
+                }
+                UserNetworkDecision.SKIP -> { /* nothing to persist */ }
+            }
+            NetworkApprovalManager.submitDecision(decision)
+            refreshLists()
         }
     }
 

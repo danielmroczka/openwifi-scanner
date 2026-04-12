@@ -3,7 +3,6 @@ package com.example.wifi
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
-import android.content.Intent
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
@@ -13,9 +12,7 @@ import android.net.wifi.WifiManager
 import android.net.wifi.WifiNetworkSpecifier
 import android.net.wifi.WifiNetworkSuggestion
 import android.os.Build
-import android.provider.Settings
 import androidx.annotation.RequiresPermission
-import androidx.core.net.toUri
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
@@ -213,28 +210,4 @@ class AndroidCaptivePortalChecker(context: Context) : CaptivePortalChecker {
     }
 }
 
-class AndroidCaptivePortalResolver(context: Context) : CaptivePortalResolver {
-    private val appContext = context.applicationContext
-
-    override fun resolve() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            val panelIntent = Intent(Settings.Panel.ACTION_INTERNET_CONNECTIVITY).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            runCatching {
-                appContext.startActivity(panelIntent)
-            }.onSuccess {
-                return
-            }
-        }
-
-        val fallbackIntent = Intent(
-            Intent.ACTION_VIEW,
-            "http://connectivitycheck.gstatic.com/generate_204".toUri()
-        ).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-        appContext.startActivity(fallbackIntent)
-    }
-}
 

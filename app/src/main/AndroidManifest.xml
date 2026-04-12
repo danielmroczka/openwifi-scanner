@@ -19,6 +19,7 @@
 
     <application
         android:allowBackup="true"
+        android:usesCleartextTraffic="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
         android:icon="@mipmap/ic_launcher"
@@ -43,6 +44,12 @@
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+
+        <activity
+            android:name=".CaptivePortalSolverActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:theme="@style/Theme.WIFI" />
     </application>
 
 </manifest>

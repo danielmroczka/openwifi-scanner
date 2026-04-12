@@ -9,10 +9,16 @@ class AutoConnectCoordinator(
     private val captivePortalChecker: CaptivePortalChecker,
     private val repository: WifiNetworkRepository? = null
 ) {
+    /**
+     * @param onUnknownNetwork called when a network is found that is NOT on the whitelist
+     *        or blacklist. The coordinator suspends until the user decides. If null, all
+     *        non-blacklisted networks are connected automatically.
+     */
     suspend fun connectNextOpenNetworkCycle(
         stopSignal: () -> Boolean,
         previousAttempts: Int,
-        onUpdate: (BackgroundAutoConnectState) -> Unit
+        onUpdate: (BackgroundAutoConnectState) -> Unit,
+        onUnknownNetwork: (suspend (WifiNetwork) -> UserNetworkDecision)? = null
     ): BackgroundAutoConnectState {
         if (stopSignal()) {
             return BackgroundAutoConnectState(isRunning = false, attempts = previousAttempts, message = "Stopped")
@@ -40,15 +46,17 @@ class AutoConnectCoordinator(
         ScanLogManager.log("Background scan found ${allNetworks.size} open networks.")
 
         // Filter out blacklisted and prioritise whitelisted networks
+        val whitelistedBssids: Set<String>
         val networks = if (repository != null) {
             val blacklisted = repository.getBlacklistedNetworks().map { it.bssid }.toSet()
-            val whitelisted = repository.getWhitelistedNetworks().map { it.bssid }.toSet()
+            whitelistedBssids = repository.getWhitelistedNetworks().map { it.bssid }.toSet()
             val filtered = allNetworks.filter { it.bssid !in blacklisted }
             if (filtered.size < allNetworks.size) {
                 ScanLogManager.log("Filtered out ${allNetworks.size - filtered.size} blacklisted network(s).")
             }
-            filtered.sortedByDescending { it.bssid in whitelisted }
+            filtered.sortedByDescending { it.bssid in whitelistedBssids }
         } else {
+            whitelistedBssids = emptySet()
             allNetworks
         }
 
@@ -66,16 +74,44 @@ class AutoConnectCoordinator(
                 return BackgroundAutoConnectState(isRunning = false, attempts = attempts, message = "Stopped")
             }
 
+            // --- Unknown network? Ask the user first ---------------------------------
+            val isWhitelisted = network.bssid in whitelistedBssids
+            if (!isWhitelisted && onUnknownNetwork != null && repository != null) {
+                ScanLogManager.log("Unknown network ${network.ssid} (${network.bssid}), requesting approval…")
+                onUpdate(
+                    BackgroundAutoConnectState(
+                        isRunning = true,
+                        currentSsid = network.ssid,
+                        attempts = attempts,
+                        message = "Waiting for approval: ${network.ssid}…"
+                    )
+                )
+                when (onUnknownNetwork(network)) {
+                    UserNetworkDecision.BLACKLIST -> {
+                        ScanLogManager.log("User blacklisted ${network.ssid}")
+                        continue
+                    }
+                    UserNetworkDecision.SKIP -> {
+                        ScanLogManager.log("User skipped ${network.ssid}")
+                        continue
+                    }
+                    UserNetworkDecision.WHITELIST -> {
+                        ScanLogManager.log("User whitelisted ${network.ssid}")
+                        // fall through to connect
+                    }
+                }
+            }
+
+            // --- Connect -------------------------------------------------------------
             attempts += 1
-            val logMessage = "Trying ${network.ssid}..."
-            ScanLogManager.log(logMessage)
+            ScanLogManager.log("Trying ${network.ssid}…")
 
             onUpdate(
                 BackgroundAutoConnectState(
                     isRunning = true,
                     currentSsid = network.ssid,
                     attempts = attempts,
-                    message = "Trying ${network.ssid}..."
+                    message = "Trying ${network.ssid}…"
                 )
             )
 
@@ -94,17 +130,18 @@ class AutoConnectCoordinator(
                     }
 
                     val portalDetected = captivePortalChecker.getStatus() == CaptivePortalStatus.CAPTIVE_PORTAL
-                    connector.disconnectCurrentNetwork()
                     if (portalDetected) {
+                        // Stay connected — let the service try to solve the portal
                         ScanLogManager.log("Captive portal detected on ${network.ssid}.")
                         return BackgroundAutoConnectState(
                             isRunning = true,
                             currentSsid = network.ssid,
                             attempts = attempts,
                             captivePortalDetected = true,
-                            message = "Captive portal detected on ${network.ssid}. Trying next network."
+                            message = "Captive portal detected on ${network.ssid}."
                         )
                     } else {
+                        connector.disconnectCurrentNetwork()
                         ScanLogManager.log("No internet on ${network.ssid}, disconnected.")
                     }
                 }
@@ -135,15 +172,13 @@ class AutoConnectCoordinator(
         return BackgroundAutoConnectState(
             isRunning = true,
             attempts = attempts,
-            message = "Open networks exhausted. Restarting scan..."
+            message = "Open networks exhausted. Restarting scan…"
         )
     }
 
     private suspend fun waitForValidatedInternet(stopSignal: () -> Boolean): Boolean {
         repeat(3) {
-            if (stopSignal()) {
-                return false
-            }
+            if (stopSignal()) return false
             when (captivePortalChecker.getStatus()) {
                 CaptivePortalStatus.OPEN_INTERNET -> return true
                 CaptivePortalStatus.CAPTIVE_PORTAL -> return false

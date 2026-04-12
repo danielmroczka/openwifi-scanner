@@ -44,7 +44,8 @@ class AutoConnectCoordinatorTest {
 
         assertTrue(result.captivePortalDetected)
         assertFalse(result.hasValidatedInternet)
-        assertEquals(1, connector.disconnectCalls)
+        // Coordinator no longer disconnects on portal — service handles solving
+        assertEquals(0, connector.disconnectCalls)
     }
 
     @Test

@@ -28,6 +28,7 @@ class AutoConnectService : Service() {
     private lateinit var connector: WifiConnector
     private lateinit var checker: CaptivePortalChecker
     private lateinit var coordinator: AutoConnectCoordinator
+    private lateinit var portalSolver: CaptivePortalAutoSolver
 
     override fun onCreate() {
         super.onCreate()
@@ -38,6 +39,7 @@ class AutoConnectService : Service() {
         val repository = RoomWifiNetworkRepository(AppDatabase.getDatabase(applicationContext).wifiNetworkDao())
 
         coordinator = AutoConnectCoordinator(scanner, connector, checker, repository)
+        portalSolver = CaptivePortalAutoSolver(applicationContext, checker)
 
         AutoConnectRuntime.update(BackgroundAutoConnectState(isRunning = true, message = "Service started."))
         ensureNotificationChannel()
@@ -51,6 +53,7 @@ class AutoConnectService : Service() {
     override fun onDestroy() {
         shouldRun = false
         autoJob?.cancel()
+        NetworkApprovalManager.clear()
         if (::connector.isInitialized) {
             connector.disconnectCurrentNetwork()
         }
@@ -76,13 +79,48 @@ class AutoConnectService : Service() {
                     val state = coordinator.connectNextOpenNetworkCycle(
                         stopSignal = { !shouldRun },
                         previousAttempts = attempts,
-                        onUpdate = { pushState(it) }
+                        onUpdate = { pushState(it) },
+                        onUnknownNetwork = { network ->
+                            // Ask the user and wait for their response (60 s timeout → SKIP)
+                            NetworkApprovalManager.requestApproval(
+                                PendingNetworkApproval(network.ssid, network.bssid, network.level)
+                            )
+                            NetworkApprovalManager.awaitDecision()
+                        }
                     )
                     attempts = state.attempts
-                    connected = state.hasValidatedInternet
                     pushState(state)
-                    if (!connected) {
-                        delay(2_000)
+
+                    when {
+                        state.hasValidatedInternet -> {
+                            connected = true
+                        }
+                        state.captivePortalDetected -> {
+                            // Try to solve the captive portal automatically
+                            pushState(state.copy(message = "Solving captive portal on ${state.currentSsid}…"))
+                            val solved = portalSolver.trySolve()
+                            if (solved) {
+                                connected = true
+                                pushState(
+                                    state.copy(
+                                        captivePortalDetected = false,
+                                        hasValidatedInternet = true,
+                                        message = "Connected to ${state.currentSsid} with internet."
+                                    )
+                                )
+                            } else {
+                                connector.disconnectCurrentNetwork()
+                                ScanLogManager.log("Portal solve failed on ${state.currentSsid}, moving on.")
+                                pushState(
+                                    BackgroundAutoConnectState(
+                                        isRunning = true,
+                                        attempts = attempts,
+                                        message = "Portal solve failed. Retrying…"
+                                    )
+                                )
+                            }
+                        }
+                        else -> delay(2_000)
                     }
                 } else {
                     val status = checker.getStatus()
@@ -94,7 +132,7 @@ class AutoConnectService : Service() {
                                     currentSsid = AutoConnectRuntime.state.value.currentSsid,
                                     attempts = attempts,
                                     hasValidatedInternet = true,
-                                    message = "Internet is available. Monitoring connection..."
+                                    message = "Internet is available. Monitoring connection…"
                                 )
                             )
                         }
@@ -106,7 +144,7 @@ class AutoConnectService : Service() {
                                     isRunning = true,
                                     attempts = attempts,
                                     captivePortalDetected = status == CaptivePortalStatus.CAPTIVE_PORTAL,
-                                    message = "Internet lost. Trying next open network..."
+                                    message = "Internet lost. Trying next open network…"
                                 )
                             )
                         }

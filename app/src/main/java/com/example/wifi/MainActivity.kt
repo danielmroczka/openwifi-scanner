@@ -75,7 +75,6 @@ class MainActivity : ComponentActivity() {
                         appContext = applicationContext
                     )
                 )
-                val captivePortalResolver = remember { AndroidCaptivePortalResolver(applicationContext) }
                 val state by vm.uiState.collectAsState()
                 val logs by ScanLogManager.logs.collectAsState()
                 var hasPermissions by remember { mutableStateOf(hasRequiredPermissions()) }
@@ -97,6 +96,47 @@ class MainActivity : ComponentActivity() {
                 }
 
                 val tabTitles = listOf("Scanner", "Whitelist", "Blacklist", "Logs")
+
+                // Approval dialog for unknown networks
+                state.pendingApproval?.let { pending ->
+                    AlertDialog(
+                        onDismissRequest = { vm.handleApprovalDecision(UserNetworkDecision.SKIP) },
+                        title = { Text("Unknown Network") },
+                        text = {
+                            Column {
+                                Text("An open network was found:")
+                                Text(
+                                    pending.ssid,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    "BSSID: ${pending.bssid}",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                                Text(
+                                    "Signal: ${pending.level} dBm",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                        },
+                        confirmButton = {
+                            TextButton(onClick = { vm.handleApprovalDecision(UserNetworkDecision.WHITELIST) }) {
+                                Text("Connect & Whitelist")
+                            }
+                        },
+                        dismissButton = {
+                            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                TextButton(onClick = { vm.handleApprovalDecision(UserNetworkDecision.BLACKLIST) }) {
+                                    Text("Block", color = MaterialTheme.colorScheme.error)
+                                }
+                                TextButton(onClick = { vm.handleApprovalDecision(UserNetworkDecision.SKIP) }) {
+                                    Text("Skip")
+                                }
+                            }
+                        }
+                    )
+                }
 
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
                     Column(modifier = Modifier.padding(innerPadding)) {
@@ -124,7 +164,7 @@ class MainActivity : ComponentActivity() {
                                 onToggleWhitelist = vm::toggleWhitelist,
                                 onStartAutoConnect = { AutoConnectService.start(this@MainActivity) },
                                 onStopAutoConnect = { AutoConnectService.stop(this@MainActivity) },
-                                onResolvePortal = captivePortalResolver::resolve,
+                                onResolvePortal = { CaptivePortalSolverActivity.launch(this@MainActivity) },
                                 modifier = Modifier.weight(1f)
                             )
                             1 -> NetworkListScreen(

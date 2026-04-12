@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">WIFI</string>
+    <string name="auto_connect_channel_name">Wi-Fi Auto Connect</string>
+    <string name="auto_connect_notification_title">Background Wi-Fi auto-connect</string>
+</resources>

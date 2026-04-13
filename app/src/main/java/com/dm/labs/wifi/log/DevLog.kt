@@ -74,7 +74,13 @@ object DevLog {
 
     /** Read full content of all log files. */
     fun readAllLogs(): String {
-        return getLogFiles().joinToString("\n\n--- ${"-".repeat(40)} ---\n\n") { file ->
+        val exportTs = timestampFormat.format(Date())
+        val files = getLogFiles()
+        if (files.isEmpty()) {
+            return "=== Exported at $exportTs ===\n\nNo developer logs available."
+        }
+        val separator = "\n\n--- ${"-".repeat(40)} ---\n\n"
+        return "=== Exported at $exportTs ===\n\n" + files.joinToString(separator) { file ->
             "=== ${file.name} ===\n${file.readText()}"
         }
     }

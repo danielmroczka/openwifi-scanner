@@ -14,9 +14,27 @@ object ScanLogManager {
     private val _logs = MutableStateFlow<List<ScanLog>>(emptyList())
     val logs: StateFlow<List<ScanLog>> = _logs.asStateFlow()
 
+    // Suppress exact-duplicate messages that occur frequently to avoid noisy logs
+    // (e.g. repeated scans every few seconds with identical content). If the
+    // same message is logged again within SUPPRESSION_MS, it will be ignored.
+    private const val SUPPRESSION_MS = 60_000L // 1 minute
+    @Volatile
+    private var lastMessage: String? = null
+    @Volatile
+    private var lastMessageTs: Long = 0L
+
     fun log(message: String) {
+        val now = System.currentTimeMillis()
+        val lm = lastMessage
+        if (lm != null && lm == message && now - lastMessageTs < SUPPRESSION_MS) {
+            // skip noisy duplicate
+            return
+        }
+        lastMessage = message
+        lastMessageTs = now
         _logs.update { current ->
-            listOf(ScanLog(message = message)) + current
+            // keep recent logs at head; cap list to reasonable length
+            (listOf(ScanLog(message = message)) + current).take(500)
         }
     }
 

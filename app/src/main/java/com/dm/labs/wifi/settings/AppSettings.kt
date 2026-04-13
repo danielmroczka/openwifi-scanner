@@ -7,7 +7,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 data class AppSettingsState(
-    val scanIntervalSeconds: Int = DEFAULT_SCAN_INTERVAL_SECONDS
+    val scanIntervalSeconds: Int = DEFAULT_SCAN_INTERVAL_SECONDS,
+    val autoStartOnBoot: Boolean = false,
+    val developerLogging: Boolean = false
 ) {
     val scanIntervalMs: Long get() = scanIntervalSeconds * 1_000L
 
@@ -29,18 +31,36 @@ class AppSettings private constructor(private val prefs: SharedPreferences) {
             _state.value = _state.value.copy(scanIntervalSeconds = clamped)
         }
 
+    var autoStartOnBoot: Boolean
+        get() = _state.value.autoStartOnBoot
+        set(value) {
+            prefs.edit().putBoolean(KEY_AUTO_START, value).apply()
+            _state.value = _state.value.copy(autoStartOnBoot = value)
+        }
+
+    var developerLogging: Boolean
+        get() = _state.value.developerLogging
+        set(value) {
+            prefs.edit().putBoolean(KEY_DEV_LOGGING, value).apply()
+            _state.value = _state.value.copy(developerLogging = value)
+        }
+
     private fun load(): AppSettingsState {
         return AppSettingsState(
             scanIntervalSeconds = prefs.getInt(
                 KEY_SCAN_INTERVAL,
                 AppSettingsState.DEFAULT_SCAN_INTERVAL_SECONDS
-            )
+            ),
+            autoStartOnBoot = prefs.getBoolean(KEY_AUTO_START, false),
+            developerLogging = prefs.getBoolean(KEY_DEV_LOGGING, false)
         )
     }
 
     companion object {
         private const val PREFS_NAME = "wifi_app_settings"
         private const val KEY_SCAN_INTERVAL = "scan_interval_seconds"
+        private const val KEY_AUTO_START = "auto_start_on_boot"
+        private const val KEY_DEV_LOGGING = "developer_logging"
 
         const val MIN_SCAN_INTERVAL = 2
         const val MAX_SCAN_INTERVAL = 60
@@ -60,4 +80,3 @@ class AppSettings private constructor(private val prefs: SharedPreferences) {
         }
     }
 }
-

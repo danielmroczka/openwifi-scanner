@@ -2,6 +2,7 @@ package com.dm.labs.wifi.autoconnect
 
 import com.dm.labs.wifi.approval.UserNetworkDecision
 import com.dm.labs.wifi.data.WifiNetworkRepository
+import com.dm.labs.wifi.log.DevLog
 import com.dm.labs.wifi.log.ScanLogManager
 import com.dm.labs.wifi.model.BackgroundAutoConnectState
 import com.dm.labs.wifi.model.CaptivePortalChecker
@@ -18,11 +19,6 @@ class AutoConnectCoordinator(
     private val captivePortalChecker: CaptivePortalChecker,
     private val repository: WifiNetworkRepository? = null
 ) {
-    /**
-     * @param onUnknownNetwork called when a network is found that is NOT on the whitelist
-     *        or blacklist. The coordinator suspends until the user decides. If null, all
-     *        non-blacklisted networks are connected automatically.
-     */
     suspend fun connectNextOpenNetworkCycle(
         stopSignal: () -> Boolean,
         previousAttempts: Int,
@@ -45,10 +41,13 @@ class AutoConnectCoordinator(
             )
         )
 
+        DevLog.d("Starting scan for open networks…")
+
         val scan = scanner.scanOpenNetworks()
         val allNetworks = scan.getOrElse {
             val errorMsg = "Scan failed: ${it.message ?: "unknown error"}"
             ScanLogManager.log(errorMsg)
+            DevLog.e("Scan failed", it)
             return BackgroundAutoConnectState(
                 isRunning = true,
                 attempts = previousAttempts,
@@ -56,29 +55,46 @@ class AutoConnectCoordinator(
             )
         }
 
-        ScanLogManager.log("Background scan found ${allNetworks.size} open networks.")
+        DevLog.d("Scan found ${allNetworks.size} open network(s): ${allNetworks.joinToString { "${it.ssid}(${it.level}dBm)" }}")
 
-        // Filter out blacklisted and prioritise whitelisted networks
+        // Filter out blacklisted, cooldown, and prioritise whitelisted
         val whitelistedBssids: Set<String>
         val networks = if (repository != null) {
             val blacklisted = repository.getBlacklistedNetworks().map { it.bssid }.toSet()
             whitelistedBssids = repository.getWhitelistedNetworks().map { it.bssid }.toSet()
-            val filtered = allNetworks.filter { it.bssid !in blacklisted }
-            if (filtered.size < allNetworks.size) {
-                ScanLogManager.log("Filtered out ${allNetworks.size - filtered.size} blacklisted network(s).")
+            val filtered = allNetworks
+                .filter { net ->
+                    if (net.bssid in blacklisted) {
+                        DevLog.d("Skipping blacklisted network: ${net.ssid} (${net.bssid})")
+                        false
+                    } else if (NetworkCooldownManager.isOnCooldown(net.ssid)) {
+                        DevLog.d("Skipping cooldown network: ${net.ssid}")
+                        false
+                    } else {
+                        true
+                    }
+                }
+            if (allNetworks.size - filtered.size > 0) {
+                DevLog.d("Filtered out ${allNetworks.size - filtered.size} network(s) (blacklisted/cooldown)")
             }
             filtered.sortedByDescending { it.bssid in whitelistedBssids }
         } else {
             whitelistedBssids = emptySet()
-            allNetworks
+            allNetworks.filter { !NetworkCooldownManager.isOnCooldown(it.ssid) }
         }
 
         if (networks.isEmpty()) {
+            DevLog.d("No eligible open networks after filtering.")
             return BackgroundAutoConnectState(
                 isRunning = true,
                 attempts = previousAttempts,
                 message = "No open networks found. Retrying..."
             )
+        }
+
+        // Log only when we find open networks (user-facing log)
+        if (allNetworks.isNotEmpty()) {
+            ScanLogManager.log("Found ${allNetworks.size} open network(s), ${networks.size} eligible.")
         }
 
         var attempts = previousAttempts
@@ -91,10 +107,10 @@ class AutoConnectCoordinator(
                 )
             }
 
-            // --- Unknown network? Ask the user first ---------------------------------
+            // --- Unknown network? Ask the user first ---
             val isWhitelisted = network.bssid in whitelistedBssids
             if (!isWhitelisted && onUnknownNetwork != null && repository != null) {
-                ScanLogManager.log("Unknown network ${network.ssid} (${network.bssid}), requesting approval…")
+                DevLog.d("Unknown network ${network.ssid} (${network.bssid}), requesting user approval…")
                 onUpdate(
                     BackgroundAutoConnectState(
                         isRunning = true,
@@ -108,22 +124,19 @@ class AutoConnectCoordinator(
                         ScanLogManager.log("User blacklisted ${network.ssid}")
                         continue
                     }
-
                     UserNetworkDecision.SKIP -> {
-                        ScanLogManager.log("User skipped ${network.ssid}")
+                        DevLog.d("User skipped ${network.ssid}")
                         continue
                     }
-
                     UserNetworkDecision.WHITELIST -> {
-                        ScanLogManager.log("User whitelisted ${network.ssid}")
-                        // fall through to connect
+                        DevLog.d("User whitelisted ${network.ssid}")
                     }
                 }
             }
 
-            // --- Connect -------------------------------------------------------------
+            // --- Connect ---
             attempts += 1
-            ScanLogManager.log("Trying ${network.ssid}…")
+            DevLog.i("Attempting connection to ${network.ssid} (${network.bssid}, ${network.level}dBm)…")
 
             onUpdate(
                 BackgroundAutoConnectState(
@@ -136,9 +149,11 @@ class AutoConnectCoordinator(
 
             when (val connect = connector.connectToOpenNetwork(network.ssid)) {
                 ConnectAttemptResult.Connected -> {
+                    DevLog.i("WiFi associated with ${network.ssid}, checking internet…")
                     val validated = waitForValidatedInternet(stopSignal)
                     if (validated) {
-                        ScanLogManager.log("Connected to ${network.ssid} with validated internet.")
+                        ScanLogManager.log("Connected to ${network.ssid} with internet access.")
+                        DevLog.i("Internet validated on ${network.ssid}")
                         return BackgroundAutoConnectState(
                             isRunning = true,
                             currentSsid = network.ssid,
@@ -148,11 +163,12 @@ class AutoConnectCoordinator(
                         )
                     }
 
-                    val portalDetected =
-                        captivePortalChecker.getStatus() == CaptivePortalStatus.CAPTIVE_PORTAL
-                    if (portalDetected) {
-                        // Stay connected — let the service try to solve the portal
+                    val portalStatus = captivePortalChecker.getStatus()
+                    DevLog.d("Post-connect status on ${network.ssid}: $portalStatus")
+
+                    if (portalStatus == CaptivePortalStatus.CAPTIVE_PORTAL) {
                         ScanLogManager.log("Captive portal detected on ${network.ssid}.")
+                        DevLog.i("Captive portal detected on ${network.ssid}, will attempt to solve.")
                         return BackgroundAutoConnectState(
                             isRunning = true,
                             currentSsid = network.ssid,
@@ -161,13 +177,17 @@ class AutoConnectCoordinator(
                             message = "Captive portal detected on ${network.ssid}."
                         )
                     } else {
+                        // No internet and no captive portal → put on 1h cooldown
                         connector.disconnectCurrentNetwork()
-                        ScanLogManager.log("No internet on ${network.ssid}, disconnected.")
+                        NetworkCooldownManager.putOnCooldown(network.ssid)
+                        ScanLogManager.log("No internet on ${network.ssid} — network on 1h cooldown.")
+                        DevLog.w("No internet on ${network.ssid} (status=$portalStatus), disconnected and put on 1h cooldown.")
                     }
                 }
 
                 is ConnectAttemptResult.Failed -> {
                     ScanLogManager.log("Failed to connect to ${network.ssid}: ${connect.reason}")
+                    DevLog.w("Connection failed to ${network.ssid}: ${connect.reason}")
                     onUpdate(
                         BackgroundAutoConnectState(
                             isRunning = true,
@@ -179,7 +199,8 @@ class AutoConnectCoordinator(
                 }
 
                 is ConnectAttemptResult.Unsupported -> {
-                    ScanLogManager.log("Unsupported connection to ${network.ssid}: ${connect.reason}")
+                    ScanLogManager.log("Unsupported: ${connect.reason}")
+                    DevLog.e("Unsupported connection to ${network.ssid}: ${connect.reason}")
                     return BackgroundAutoConnectState(
                         isRunning = false,
                         attempts = attempts,
@@ -208,4 +229,3 @@ class AutoConnectCoordinator(
         return false
     }
 }
-

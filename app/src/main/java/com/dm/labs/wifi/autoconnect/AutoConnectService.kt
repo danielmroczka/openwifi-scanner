@@ -15,6 +15,7 @@ import com.dm.labs.wifi.approval.PendingNetworkApproval
 import com.dm.labs.wifi.captive.CaptivePortalAutoSolver
 import com.dm.labs.wifi.data.AppDatabase
 import com.dm.labs.wifi.data.RoomWifiNetworkRepository
+import com.dm.labs.wifi.log.DevLog
 import com.dm.labs.wifi.log.ScanLogManager
 import com.dm.labs.wifi.model.BackgroundAutoConnectState
 import com.dm.labs.wifi.model.CaptivePortalChecker
@@ -47,6 +48,8 @@ class AutoConnectService : Service() {
     override fun onCreate() {
         super.onCreate()
 
+        DevLog.init(applicationContext)
+
         val scanner = AndroidWifiScanner(applicationContext)
         connector = AndroidWifiConnector(applicationContext)
         checker = AndroidCaptivePortalChecker(applicationContext)
@@ -56,6 +59,9 @@ class AutoConnectService : Service() {
         coordinator = AutoConnectCoordinator(scanner, connector, checker, repository)
         portalSolver = CaptivePortalAutoSolver(applicationContext, checker)
         appSettings = AppSettings.getInstance(applicationContext)
+
+        ScanLogManager.log("Auto-connect scanner started.")
+        DevLog.i("AutoConnectService created.")
 
         AutoConnectRuntime.update(
             BackgroundAutoConnectState(
@@ -78,9 +84,17 @@ class AutoConnectService : Service() {
         if (::connector.isInitialized) {
             connector.disconnectCurrentNetwork()
         }
+        ScanLogManager.log("Auto-connect scanner stopped.")
+        DevLog.i("AutoConnectService destroyed.")
         AutoConnectRuntime.reset()
         serviceScope.cancel()
         super.onDestroy()
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        DevLog.i("App removed from recents – stopping AutoConnectService.")
+        stopSelf()
+        super.onTaskRemoved(rootIntent)
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -118,9 +132,12 @@ class AutoConnectService : Service() {
 
                         state.captivePortalDetected -> {
                             pushState(state.copy(message = "Solving captive portal on ${state.currentSsid}…"))
+                            DevLog.i("Attempting captive portal solve on ${state.currentSsid}…")
                             val solved = portalSolver.trySolve()
                             if (solved) {
                                 connected = true
+                                ScanLogManager.log("Captive portal solved on ${state.currentSsid}.")
+                                DevLog.i("Captive portal solved successfully on ${state.currentSsid}")
                                 pushState(
                                     state.copy(
                                         captivePortalDetected = false,
@@ -130,12 +147,15 @@ class AutoConnectService : Service() {
                                 )
                             } else {
                                 connector.disconnectCurrentNetwork()
-                                ScanLogManager.log("Portal solve failed on ${state.currentSsid}, moving on.")
+                                val ssid = state.currentSsid ?: "unknown"
+                                NetworkCooldownManager.putOnCooldown(ssid)
+                                ScanLogManager.log("Captive portal solve failed on $ssid — network on 1h cooldown.")
+                                DevLog.w("Captive portal solve failed on $ssid. Disconnected, put on cooldown.")
                                 pushState(
                                     BackgroundAutoConnectState(
                                         isRunning = true,
                                         attempts = attempts,
-                                        message = "Portal solve failed. Retrying…"
+                                        message = "Portal solve failed on $ssid. Retrying…"
                                     )
                                 )
                             }
@@ -145,6 +165,7 @@ class AutoConnectService : Service() {
                     }
                 } else {
                     val status = checker.getStatus()
+                    DevLog.d("Connection monitor check: $status")
                     when (status) {
                         CaptivePortalStatus.OPEN_INTERNET -> {
                             pushState(
@@ -159,8 +180,11 @@ class AutoConnectService : Service() {
                         }
 
                         else -> {
+                            val ssid = AutoConnectRuntime.state.value.currentSsid
                             connector.disconnectCurrentNetwork()
                             connected = false
+                            ScanLogManager.log("Internet lost on $ssid. Reconnecting…")
+                            DevLog.w("Internet lost (status=$status) on $ssid. Will reconnect.")
                             pushState(
                                 BackgroundAutoConnectState(
                                     isRunning = true,

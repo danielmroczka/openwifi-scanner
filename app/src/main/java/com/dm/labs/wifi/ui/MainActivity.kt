@@ -15,14 +15,19 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Home
@@ -49,6 +54,7 @@ import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -77,6 +83,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.launch
 import com.dm.labs.wifi.approval.UserNetworkDecision
 import com.dm.labs.wifi.autoconnect.AutoConnectService
+import com.dm.labs.wifi.autoconnect.NetworkCooldownManager
 import com.dm.labs.wifi.captive.CaptivePortalSolverActivity
 import com.dm.labs.wifi.data.AppDatabase
 import com.dm.labs.wifi.data.CaptivePortalSolutionEntity
@@ -84,6 +91,7 @@ import com.dm.labs.wifi.data.CaptivePortalStepEntity
 import com.dm.labs.wifi.data.RoomCaptivePortalSolutionRepository
 import com.dm.labs.wifi.data.RoomWifiNetworkRepository
 import com.dm.labs.wifi.data.WifiNetworkEntity
+import com.dm.labs.wifi.log.DevLog
 import com.dm.labs.wifi.log.ScanLog
 import com.dm.labs.wifi.log.ScanLogManager
 import com.dm.labs.wifi.model.WifiNetwork
@@ -100,6 +108,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        DevLog.init(applicationContext)
 
         setContent {
             WIFITheme {
@@ -272,6 +281,7 @@ class MainActivity : ComponentActivity() {
                             0 -> WifiScreen(
                                 state = state,
                                 hasPermissions = hasPermissions,
+                                cooldownSsids = remember { NetworkCooldownManager.getCooldownSsids() },
                                 onRequestPermissions = {
                                     permissionsLauncher.launch(requiredPermissions())
                                 },
@@ -334,6 +344,18 @@ class MainActivity : ComponentActivity() {
                             3 -> LogsScreen(
                                 logs = logs,
                                 onClearLogs = { ScanLogManager.clearLogs() },
+                                onExportDevLogs = {
+                                    scope.launch {
+                                        val content = DevLog.readAllLogs()
+                                        if (content.isNotEmpty()) {
+                                            exportJson = content
+                                            exportFileName = "dev_logs_export.txt"
+                                            exportDocLauncher.launch(exportFileName)
+                                        } else {
+                                            Toast.makeText(this@MainActivity, "No dev logs to export", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                },
                                 modifier = Modifier.weight(1f)
                             )
                         }
@@ -371,6 +393,7 @@ class MainActivity : ComponentActivity() {
 fun WifiScreen(
     state: WifiUiState,
     hasPermissions: Boolean,
+    cooldownSsids: Set<String> = emptySet(),
     onRequestPermissions: () -> Unit,
     onScan: () -> Unit,
     onConnect: (String) -> Unit,
@@ -480,10 +503,11 @@ fun WifiScreen(
             items(state.networks) { network ->
                 val isBlacklisted = network.bssid in state.blacklistedBssids
                 val isWhitelisted = network.bssid in state.whitelistedBssids
+                val isOnCooldown = network.ssid in cooldownSsids
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable(enabled = !state.isConnecting && !isBlacklisted) {
+                        .clickable(enabled = !state.isConnecting && !isBlacklisted && !isOnCooldown) {
                             onConnect(network.ssid)
                         }
                 ) {
@@ -513,6 +537,13 @@ fun WifiScreen(
                                             color = MaterialTheme.colorScheme.error
                                         )
                                     }
+                                    if (isOnCooldown) {
+                                        Text(
+                                            " ⏳",
+                                            style = MaterialTheme.typography.titleSmall,
+                                            color = MaterialTheme.colorScheme.outline
+                                        )
+                                    }
                                 }
                                 Text(
                                     text = "BSSID: ${network.bssid}",
@@ -523,6 +554,13 @@ fun WifiScreen(
                                     text = "${network.level} dBm",
                                     style = MaterialTheme.typography.bodySmall
                                 )
+                                if (isOnCooldown) {
+                                    Text(
+                                        text = "⏳ Cooldown – no internet detected",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.outline
+                                    )
+                                }
                             }
                             val signalStrength = when {
                                 network.level >= -50 -> "▂▄▆█"
@@ -1496,45 +1534,121 @@ private fun EditStepDialog(
 fun LogsScreen(
     logs: List<ScanLog>,
     onClearLogs: () -> Unit,
+    onExportDevLogs: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    var showScanLogs by remember { mutableStateOf(true) }
+
     Column(modifier = modifier
         .fillMaxSize()
         .padding(16.dp)) {
+
+        // ── Toggle chips ──
         Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Text("Scan Logs", style = MaterialTheme.typography.headlineSmall)
-            Button(onClick = onClearLogs) {
-                Text("Clear")
-            }
+            FilterChip(
+                selected = showScanLogs,
+                onClick = { showScanLogs = true },
+                label = { Text("Scan Logs") }
+            )
+            FilterChip(
+                selected = !showScanLogs,
+                onClick = { showScanLogs = false },
+                label = { Text("Dev Logs") }
+            )
         }
 
-        LazyColumn(
-            modifier = Modifier
-                .weight(1f)
-                .padding(top = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            if (logs.isEmpty()) {
-                item {
-                    Text("No logs yet.")
+        if (showScanLogs) {
+            // ── Scan Logs ──
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Scan Logs (${logs.size})", style = MaterialTheme.typography.titleMedium)
+                Button(onClick = onClearLogs) {
+                    Text("Clear")
                 }
             }
-            items(logs) { log ->
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Column(modifier = Modifier.padding(8.dp)) {
+
+            LazyColumn(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(top = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                if (logs.isEmpty()) {
+                    item {
                         Text(
-                            text = java.text.SimpleDateFormat(
-                                "yyyy-MM-dd HH:mm:ss",
-                                java.util.Locale.getDefault()
-                            ).format(java.util.Date(log.timestamp)),
-                            style = MaterialTheme.typography.bodySmall
+                            "No scan logs yet.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                        Text(text = log.message, style = MaterialTheme.typography.bodyMedium)
                     }
+                }
+                items(logs) { log ->
+                    Card(modifier = Modifier.fillMaxWidth()) {
+                        Column(modifier = Modifier.padding(8.dp)) {
+                            Text(
+                                text = java.text.SimpleDateFormat(
+                                    "yyyy-MM-dd HH:mm:ss",
+                                    java.util.Locale.getDefault()
+                                ).format(java.util.Date(log.timestamp)),
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            Text(text = log.message, style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+                }
+            }
+        } else {
+            // ── Dev Logs ──
+            val devLogContent = remember { mutableStateOf("") }
+            val devLogFiles = remember { mutableStateOf(DevLog.getLogFiles()) }
+
+            LaunchedEffect(showScanLogs) {
+                devLogFiles.value = DevLog.getLogFiles()
+                devLogContent.value = DevLog.readAllLogs()
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "Dev Logs (${devLogFiles.value.size} file${if (devLogFiles.value.size != 1) "s" else ""})",
+                    style = MaterialTheme.typography.titleMedium
+                )
+                Button(
+                    onClick = onExportDevLogs,
+                    enabled = devLogContent.value.isNotEmpty()
+                ) {
+                    Text("📤 Export")
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            if (devLogContent.value.isEmpty()) {
+                Text(
+                    "No developer logs.\n\nEnable developer logging in Settings to capture detailed troubleshooting data.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                SelectionContainer(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = devLogContent.value,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .verticalScroll(rememberScrollState())
+                    )
                 }
             }
         }
@@ -1561,45 +1675,104 @@ fun SettingsDialog(
         onDismissRequest = onDismiss,
         title = { Text("Settings") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("Scan interval", style = MaterialTheme.typography.titleMedium)
-                Text(
-                    "How often the app scans for open Wi-Fi networks (${AppSettings.MIN_SCAN_INTERVAL}–${AppSettings.MAX_SCAN_INTERVAL} s).",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    IconButton(onClick = {
-                        applyValue(
-                            (textValue.toIntOrNull() ?: settingsState.scanIntervalSeconds) - 1
+            LazyColumn(
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                // ── Scan Interval ──
+                item {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("Scan interval", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "How often the app scans for open Wi-Fi networks (${AppSettings.MIN_SCAN_INTERVAL}–${AppSettings.MAX_SCAN_INTERVAL} s).",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                    }) {
-                        Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Decrease")
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            IconButton(onClick = {
+                                applyValue(
+                                    (textValue.toIntOrNull() ?: settingsState.scanIntervalSeconds) - 1
+                                )
+                            }) {
+                                Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Decrease")
+                            }
+                            OutlinedTextField(
+                                value = textValue,
+                                onValueChange = { input ->
+                                    textValue = input.filter { it.isDigit() }
+                                    input.toIntOrNull()?.let { applyValue(it) }
+                                },
+                                modifier = Modifier.width(80.dp),
+                                textStyle = MaterialTheme.typography.titleMedium.copy(textAlign = TextAlign.Center),
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                suffix = { Text("s") }
+                            )
+                            IconButton(onClick = {
+                                applyValue(
+                                    (textValue.toIntOrNull() ?: settingsState.scanIntervalSeconds) + 1
+                                )
+                            }) {
+                                Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Increase")
+                            }
+                        }
                     }
+                }
 
-                    OutlinedTextField(
-                        value = textValue,
-                        onValueChange = { input ->
-                            textValue = input.filter { it.isDigit() }
-                            input.toIntOrNull()?.let { applyValue(it) }
-                        },
-                        modifier = Modifier.width(80.dp),
-                        textStyle = MaterialTheme.typography.titleMedium.copy(textAlign = TextAlign.Center),
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        suffix = { Text("s") }
-                    )
-
-                    IconButton(onClick = {
-                        applyValue(
-                            (textValue.toIntOrNull() ?: settingsState.scanIntervalSeconds) + 1
+                // ── Auto-start on boot ──
+                item {
+                    HorizontalDivider()
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("Auto-start on boot", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "Start the auto-connect service automatically when the device boots. The service runs until you close the app.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                    }) {
-                        Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Increase")
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                if (settingsState.autoStartOnBoot) "Enabled" else "Disabled",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Switch(
+                                checked = settingsState.autoStartOnBoot,
+                                onCheckedChange = { appSettings.autoStartOnBoot = it }
+                            )
+                        }
+                    }
+                }
+
+                // ── Developer Logging ──
+                item {
+                    HorizontalDivider()
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("Developer logging", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "Write detailed troubleshooting logs to a file. Logs are kept for 7 days. Enable this if you need to diagnose connection issues.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                if (settingsState.developerLogging) "Enabled" else "Disabled",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Switch(
+                                checked = settingsState.developerLogging,
+                                onCheckedChange = { appSettings.developerLogging = it }
+                            )
+                        }
                     }
                 }
             }
@@ -1628,6 +1801,7 @@ fun WifiScreenPreview() {
                 needsPortalLogin = true
             ),
             hasPermissions = true,
+            cooldownSsids = emptySet(),
             onRequestPermissions = {},
             onScan = {},
             onConnect = {},

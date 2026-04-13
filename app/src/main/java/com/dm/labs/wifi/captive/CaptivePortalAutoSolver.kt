@@ -1,6 +1,7 @@
 package com.dm.labs.wifi.captive
 
 import android.content.Context
+import com.dm.labs.wifi.data.CaptivePortalSolutionRepository
 import com.dm.labs.wifi.log.ScanLogManager
 import com.dm.labs.wifi.model.CaptivePortalChecker
 import com.dm.labs.wifi.model.CaptivePortalStatus
@@ -18,20 +19,43 @@ import java.net.URLEncoder
  *    injected JS to solve it.
  */
 class CaptivePortalAutoSolver(
-    private val context: Context,
-    private val checker: CaptivePortalChecker
+    private val checker: CaptivePortalChecker,
+    private val solutionRepository: CaptivePortalSolutionRepository? = null,
+    private val replayLauncher: ((String, Long) -> Unit),
+    private val interactiveLauncher: ((String) -> Unit),
+    private val httpSolver: (suspend () -> Boolean)? = null,
+    private val resolutionWaiter: (suspend (Long) -> Boolean)? = null
 ) {
-    suspend fun trySolve(): Boolean {
+    suspend fun trySolve(ssid: String?): Boolean {
+        val knownSsid = ssid?.takeIf { it.isNotBlank() }
+        if (knownSsid != null && solutionRepository != null) {
+            val solution = solutionRepository.getLatestSolutionForSsid(knownSsid)
+            if (solution != null) {
+                ScanLogManager.log("Found saved portal steps for $knownSsid. Trying replay…")
+                replayLauncher(knownSsid, solution.id)
+                if (waitForResolutionOrInjected(90_000L)) {
+                    ScanLogManager.log("Portal replay succeeded on $knownSsid.")
+                    return true
+                }
+                ScanLogManager.log("Portal replay failed on $knownSsid. Falling back to HTTP solve…")
+            }
+        }
+
         ScanLogManager.log("Attempting HTTP-based portal solve…")
-        if (trySolveViaHttp()) {
+        val solvedByHttp = httpSolver?.invoke() ?: trySolveViaHttp()
+        if (solvedByHttp) {
             ScanLogManager.log("HTTP portal solve succeeded!")
             return true
         }
 
         ScanLogManager.log("HTTP solve failed. Launching interactive solver…")
-        CaptivePortalSolverActivity.launch(context, ssid = "AutoDetected")
+        interactiveLauncher(knownSsid ?: "Unknown")
 
-        return waitForResolution(timeoutMs = 120_000L)
+        return waitForResolutionOrInjected(120_000L)
+    }
+
+    private suspend fun waitForResolutionOrInjected(timeoutMs: Long): Boolean {
+        return resolutionWaiter?.invoke(timeoutMs) ?: waitForResolution(timeoutMs)
     }
 
     /* ---- HTTP-based auto-solve ---------------------------------------------------- */
@@ -126,6 +150,23 @@ class CaptivePortalAutoSolver(
     }
 
     companion object {
+        fun create(
+            context: Context,
+            checker: CaptivePortalChecker,
+            solutionRepository: CaptivePortalSolutionRepository? = null
+        ): CaptivePortalAutoSolver {
+            return CaptivePortalAutoSolver(
+                checker = checker,
+                solutionRepository = solutionRepository,
+                replayLauncher = { ssid, solutionId ->
+                    CaptivePortalSolverActivity.launchReplay(context, ssid, solutionId)
+                },
+                interactiveLauncher = { ssid ->
+                    CaptivePortalSolverActivity.launch(context, ssid)
+                }
+            )
+        }
+
         private const val CONNECTIVITY_CHECK =
             "http://connectivitycheck.gstatic.com/generate_204"
         private const val UA =

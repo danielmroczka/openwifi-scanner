@@ -1,5 +1,8 @@
 package com.dm.labs.wifi.autoconnect
 
+import com.dm.labs.wifi.approval.UserNetworkDecision
+import com.dm.labs.wifi.data.WifiNetworkEntity
+import com.dm.labs.wifi.data.WifiNetworkRepository
 import com.dm.labs.wifi.log.ScanLogManager
 import com.dm.labs.wifi.model.BackgroundAutoConnectState
 import com.dm.labs.wifi.model.CaptivePortalChecker
@@ -451,6 +454,63 @@ class AutoConnectCoordinatorTest {
         assertTrue(logs.any { it.message.contains("Background scan found 3 open networks") })
     }
 
+    @Test
+    fun `unknown network approval whitelists and connects`() = runTest {
+        val repository = InMemoryWifiRepo()
+        val coordinator = AutoConnectCoordinator(
+            scanner = FakeScanner(
+                Result.success(
+                    listOf(
+                        WifiNetwork("Cafe", "aa:bb:cc:00:00:21", "[ESS]", -40)
+                    )
+                )
+            ),
+            connector = FakeConnector(ConnectAttemptResult.Connected),
+            captivePortalChecker = FakePortalChecker(mutableListOf(CaptivePortalStatus.OPEN_INTERNET)),
+            repository = repository
+        )
+
+        val result = coordinator.connectNextOpenNetworkCycle(
+            stopSignal = { false },
+            previousAttempts = 0,
+            onUpdate = {},
+            onUnknownNetwork = { UserNetworkDecision.WHITELIST }
+        )
+
+        assertTrue(repository.isWhitelisted("aa:bb:cc:00:00:21"))
+        assertTrue(result.hasValidatedInternet)
+        assertEquals("Cafe", result.currentSsid)
+    }
+
+    @Test
+    fun `unknown network approval blacklist skips connection`() = runTest {
+        val repository = InMemoryWifiRepo()
+        val connector = FakeConnector(ConnectAttemptResult.Connected)
+        val coordinator = AutoConnectCoordinator(
+            scanner = FakeScanner(
+                Result.success(
+                    listOf(
+                        WifiNetwork("BlockMe", "aa:bb:cc:00:00:22", "[ESS]", -55)
+                    )
+                )
+            ),
+            connector = connector,
+            captivePortalChecker = FakePortalChecker(mutableListOf()),
+            repository = repository
+        )
+
+        val result = coordinator.connectNextOpenNetworkCycle(
+            stopSignal = { false },
+            previousAttempts = 0,
+            onUpdate = {},
+            onUnknownNetwork = { UserNetworkDecision.BLACKLIST }
+        )
+
+        assertTrue(repository.isBlacklisted("aa:bb:cc:00:00:22"))
+        assertEquals(0, result.attempts)
+        assertEquals(0, connector.disconnectCalls)
+    }
+
     private class FakeScanner(private val result: Result<List<WifiNetwork>>) : WifiScanner {
         override suspend fun scanOpenNetworks(): Result<List<WifiNetwork>> = result
     }
@@ -467,6 +527,82 @@ class AutoConnectCoordinatorTest {
         CaptivePortalChecker {
         override fun getStatus(): CaptivePortalStatus {
             return if (statuses.isNotEmpty()) statuses.removeAt(0) else CaptivePortalStatus.UNKNOWN
+        }
+    }
+
+    private class InMemoryWifiRepo : WifiNetworkRepository {
+        private val store = mutableMapOf<String, WifiNetworkEntity>()
+
+        override suspend fun getNetwork(bssid: String): WifiNetworkEntity? = store[bssid]
+
+        override suspend fun getBlacklistedNetworks(): List<WifiNetworkEntity> =
+            store.values.filter { it.isBlacklisted }
+
+        override suspend fun getWhitelistedNetworks(): List<WifiNetworkEntity> =
+            store.values.filter { it.isWhitelisted }
+
+        override suspend fun getAllNetworks(): List<WifiNetworkEntity> = store.values.toList()
+
+        override suspend fun recordNetwork(
+            bssid: String,
+            ssid: String,
+            latitude: Double?,
+            longitude: Double?
+        ) {
+            store[bssid] = (store[bssid] ?: WifiNetworkEntity(bssid = bssid, ssid = ssid)).copy(
+                ssid = ssid,
+                latitude = latitude,
+                longitude = longitude
+            )
+        }
+
+        override suspend fun setBlacklisted(
+            bssid: String,
+            ssid: String,
+            blacklisted: Boolean,
+            latitude: Double?,
+            longitude: Double?
+        ) {
+            val current = store[bssid] ?: WifiNetworkEntity(bssid = bssid, ssid = ssid)
+            store[bssid] = current.copy(
+                ssid = ssid,
+                isBlacklisted = blacklisted,
+                isWhitelisted = if (blacklisted) false else current.isWhitelisted,
+                latitude = latitude,
+                longitude = longitude
+            )
+        }
+
+        override suspend fun setWhitelisted(
+            bssid: String,
+            ssid: String,
+            whitelisted: Boolean,
+            latitude: Double?,
+            longitude: Double?
+        ) {
+            val current = store[bssid] ?: WifiNetworkEntity(bssid = bssid, ssid = ssid)
+            store[bssid] = current.copy(
+                ssid = ssid,
+                isWhitelisted = whitelisted,
+                isBlacklisted = if (whitelisted) false else current.isBlacklisted,
+                latitude = latitude,
+                longitude = longitude
+            )
+        }
+
+        override suspend fun deleteNetwork(bssid: String) {
+            store.remove(bssid)
+        }
+
+        override suspend fun isBlacklisted(bssid: String): Boolean =
+            store[bssid]?.isBlacklisted == true
+
+        override suspend fun isWhitelisted(bssid: String): Boolean =
+            store[bssid]?.isWhitelisted == true
+
+        override suspend fun updateLocation(bssid: String, latitude: Double, longitude: Double) {
+            val current = store[bssid] ?: return
+            store[bssid] = current.copy(latitude = latitude, longitude = longitude)
         }
     }
 }

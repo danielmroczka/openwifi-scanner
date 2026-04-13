@@ -252,33 +252,7 @@ class WifiViewModel(
 
     fun handleApprovalDecision(decision: UserNetworkDecision) {
         viewModelScope.launch {
-            val pending = NetworkApprovalManager.pending.value ?: return@launch
-            val repo = repository
-            val location = appContext?.let { LocationProvider.getLastKnownLocation(it) }
-            when (decision) {
-                UserNetworkDecision.WHITELIST -> {
-                    repo?.setWhitelisted(
-                        pending.bssid,
-                        pending.ssid,
-                        true,
-                        location?.latitude,
-                        location?.longitude
-                    )
-                }
-
-                UserNetworkDecision.BLACKLIST -> {
-                    repo?.setBlacklisted(
-                        pending.bssid,
-                        pending.ssid,
-                        true,
-                        location?.latitude,
-                        location?.longitude
-                    )
-                }
-
-                UserNetworkDecision.SKIP -> { /* nothing to persist */
-                }
-            }
+            if (NetworkApprovalManager.pending.value == null) return@launch
             NetworkApprovalManager.submitDecision(decision)
             refreshLists()
         }

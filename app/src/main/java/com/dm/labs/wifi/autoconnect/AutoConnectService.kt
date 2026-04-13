@@ -3,6 +3,7 @@ package com.dm.labs.wifi.autoconnect
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -14,6 +15,7 @@ import com.dm.labs.wifi.approval.NetworkApprovalManager
 import com.dm.labs.wifi.approval.PendingNetworkApproval
 import com.dm.labs.wifi.captive.CaptivePortalAutoSolver
 import com.dm.labs.wifi.data.AppDatabase
+import com.dm.labs.wifi.data.RoomCaptivePortalSolutionRepository
 import com.dm.labs.wifi.data.RoomWifiNetworkRepository
 import com.dm.labs.wifi.log.DevLog
 import com.dm.labs.wifi.log.ScanLogManager
@@ -44,6 +46,7 @@ class AutoConnectService : Service() {
     private lateinit var coordinator: AutoConnectCoordinator
     private lateinit var portalSolver: CaptivePortalAutoSolver
     private lateinit var appSettings: AppSettings
+    private val approvalNotificationId = NOTIFICATION_ID + 1
 
     override fun onCreate() {
         super.onCreate()
@@ -53,11 +56,12 @@ class AutoConnectService : Service() {
         val scanner = AndroidWifiScanner(applicationContext)
         connector = AndroidWifiConnector(applicationContext)
         checker = AndroidCaptivePortalChecker(applicationContext)
-        val repository =
-            RoomWifiNetworkRepository(AppDatabase.getDatabase(applicationContext).wifiNetworkDao())
+        val database = AppDatabase.getDatabase(applicationContext)
+        val repository = RoomWifiNetworkRepository(database.wifiNetworkDao())
+        val solutionRepository = RoomCaptivePortalSolutionRepository(database.captivePortalSolutionDao())
 
         coordinator = AutoConnectCoordinator(scanner, connector, checker, repository)
-        portalSolver = CaptivePortalAutoSolver(applicationContext, checker)
+        portalSolver = CaptivePortalAutoSolver.create(applicationContext, checker, solutionRepository)
         appSettings = AppSettings.getInstance(applicationContext)
 
         ScanLogManager.log("Auto-connect scanner started.")
@@ -80,6 +84,7 @@ class AutoConnectService : Service() {
     override fun onDestroy() {
         shouldRun = false
         autoJob?.cancel()
+        clearApprovalNotification()
         NetworkApprovalManager.clear()
         if (::connector.isInitialized) {
             connector.disconnectCurrentNetwork()
@@ -119,7 +124,10 @@ class AutoConnectService : Service() {
                             NetworkApprovalManager.requestApproval(
                                 PendingNetworkApproval(network.ssid, network.bssid, network.level)
                             )
-                            NetworkApprovalManager.awaitDecision()
+                            showApprovalNotification(network.ssid, network.bssid)
+                            val decision = NetworkApprovalManager.awaitDecision()
+                            clearApprovalNotification()
+                            decision
                         }
                     )
                     attempts = state.attempts
@@ -133,7 +141,7 @@ class AutoConnectService : Service() {
                         state.captivePortalDetected -> {
                             pushState(state.copy(message = "Solving captive portal on ${state.currentSsid}…"))
                             DevLog.i("Attempting captive portal solve on ${state.currentSsid}…")
-                            val solved = portalSolver.trySolve()
+                            val solved = portalSolver.trySolve(state.currentSsid)
                             if (solved) {
                                 connected = true
                                 ScanLogManager.log("Captive portal solved on ${state.currentSsid}.")
@@ -205,6 +213,59 @@ class AutoConnectService : Service() {
         AutoConnectRuntime.update(state)
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         manager.notify(NOTIFICATION_ID, buildNotification(state.message))
+    }
+
+    private fun showApprovalNotification(ssid: String, bssid: String) {
+        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val whitelistIntent = Intent(this, ApprovalActionReceiver::class.java).apply {
+            action = ApprovalActionReceiver.ACTION_APPROVAL_DECISION
+            putExtra(ApprovalActionReceiver.EXTRA_DECISION, "WHITELIST")
+        }
+        val blacklistIntent = Intent(this, ApprovalActionReceiver::class.java).apply {
+            action = ApprovalActionReceiver.ACTION_APPROVAL_DECISION
+            putExtra(ApprovalActionReceiver.EXTRA_DECISION, "BLACKLIST")
+        }
+        val skipIntent = Intent(this, ApprovalActionReceiver::class.java).apply {
+            action = ApprovalActionReceiver.ACTION_APPROVAL_DECISION
+            putExtra(ApprovalActionReceiver.EXTRA_DECISION, "SKIP")
+        }
+
+        val whitelistPendingIntent = PendingIntent.getBroadcast(
+            this,
+            101,
+            whitelistIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val blacklistPendingIntent = PendingIntent.getBroadcast(
+            this,
+            102,
+            blacklistIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val skipPendingIntent = PendingIntent.getBroadcast(
+            this,
+            103,
+            skipIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle("Unknown open network")
+            .setContentText("$ssid ($bssid) found. Connect?")
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setAutoCancel(true)
+            .addAction(0, "Connect & Favourite", whitelistPendingIntent)
+            .addAction(0, "Block", blacklistPendingIntent)
+            .addAction(0, "Skip", skipPendingIntent)
+            .build()
+
+        manager.notify(approvalNotificationId, notification)
+    }
+
+    private fun clearApprovalNotification() {
+        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        manager.cancel(approvalNotificationId)
     }
 
     private fun ensureNotificationChannel() {

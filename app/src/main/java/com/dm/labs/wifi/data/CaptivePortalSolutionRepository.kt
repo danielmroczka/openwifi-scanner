@@ -25,6 +25,7 @@ interface CaptivePortalSolutionRepository {
     suspend fun finishRecording(solutionId: Long)
     suspend fun getAllSolutions(): List<CaptivePortalSolutionEntity>
     suspend fun getSolutionsForSsid(ssid: String): List<CaptivePortalSolutionEntity>
+    suspend fun getLatestSolutionForSsid(ssid: String): CaptivePortalSolutionEntity?
     suspend fun getSolutionWithSteps(solutionId: Long): SolutionWithSteps?
     suspend fun deleteSolution(solutionId: Long)
     suspend fun updateSolutionInfo(solutionId: Long, ssid: String, description: String, portalUrl: String)
@@ -88,6 +89,10 @@ class RoomCaptivePortalSolutionRepository(
 
     override suspend fun getSolutionsForSsid(ssid: String): List<CaptivePortalSolutionEntity> {
         return dao.getSolutionsForSsid(ssid)
+    }
+
+    override suspend fun getLatestSolutionForSsid(ssid: String): CaptivePortalSolutionEntity? {
+        return dao.getSolutionsForSsid(ssid).firstOrNull()
     }
 
     override suspend fun getSolutionWithSteps(solutionId: Long): SolutionWithSteps? {

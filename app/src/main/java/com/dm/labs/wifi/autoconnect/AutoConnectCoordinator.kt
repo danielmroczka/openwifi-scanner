@@ -121,6 +121,7 @@ class AutoConnectCoordinator(
                 )
                 when (onUnknownNetwork(network)) {
                     UserNetworkDecision.BLACKLIST -> {
+                        repository.setBlacklisted(network.bssid, network.ssid, true)
                         ScanLogManager.log("User blacklisted ${network.ssid}")
                         continue
                     }
@@ -129,6 +130,7 @@ class AutoConnectCoordinator(
                         continue
                     }
                     UserNetworkDecision.WHITELIST -> {
+                        repository.setWhitelisted(network.bssid, network.ssid, true)
                         DevLog.d("User whitelisted ${network.ssid}")
                     }
                 }

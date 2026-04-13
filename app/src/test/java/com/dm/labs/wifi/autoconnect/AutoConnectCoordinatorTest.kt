@@ -1,6 +1,10 @@
 package com.dm.labs.wifi.autoconnect
 
+import android.content.Intent
+import android.content.ContextWrapper
 import com.dm.labs.wifi.approval.UserNetworkDecision
+import com.dm.labs.wifi.approval.NetworkApprovalManager
+import com.dm.labs.wifi.approval.PendingNetworkApproval
 import com.dm.labs.wifi.data.WifiNetworkEntity
 import com.dm.labs.wifi.data.WifiNetworkRepository
 import com.dm.labs.wifi.log.ScanLogManager
@@ -26,11 +30,13 @@ class AutoConnectCoordinatorTest {
     @Before
     fun setUp() {
         ScanLogManager.clearLogs()
+        NetworkApprovalManager.clear()
     }
 
     @After
     fun tearDown() {
         ScanLogManager.clearLogs()
+        NetworkApprovalManager.clear()
     }
 
     @Test
@@ -509,6 +515,46 @@ class AutoConnectCoordinatorTest {
         assertTrue(repository.isBlacklisted("aa:bb:cc:00:00:22"))
         assertEquals(0, result.attempts)
         assertEquals(0, connector.disconnectCalls)
+    }
+
+    @Test
+    fun `approval action receiver drives coordinator whitelist flow`() = runTest {
+        val repository = InMemoryWifiRepo()
+        val receiver = ApprovalActionReceiver()
+        val coordinator = AutoConnectCoordinator(
+            scanner = FakeScanner(
+                Result.success(
+                    listOf(
+                        WifiNetwork("Square", "aa:bb:cc:00:00:23", "[ESS]", -48)
+                    )
+                )
+            ),
+            connector = FakeConnector(ConnectAttemptResult.Connected),
+            captivePortalChecker = FakePortalChecker(mutableListOf(CaptivePortalStatus.OPEN_INTERNET)),
+            repository = repository
+        )
+
+        val result = coordinator.connectNextOpenNetworkCycle(
+            stopSignal = { false },
+            previousAttempts = 0,
+            onUpdate = {},
+            onUnknownNetwork = { network ->
+                NetworkApprovalManager.requestApproval(
+                    PendingNetworkApproval(network.ssid, network.bssid, network.level)
+                )
+                receiver.onReceive(
+                    ContextWrapper(null),
+                    Intent(ApprovalActionReceiver.ACTION_APPROVAL_DECISION).apply {
+                        putExtra(ApprovalActionReceiver.EXTRA_DECISION, UserNetworkDecision.WHITELIST.name)
+                    }
+                )
+                NetworkApprovalManager.awaitDecision(timeoutMs = 200)
+            }
+        )
+
+        assertTrue(repository.isWhitelisted("aa:bb:cc:00:00:23"))
+        assertTrue(result.hasValidatedInternet)
+        assertEquals("Square", result.currentSsid)
     }
 
     private class FakeScanner(private val result: Result<List<WifiNetwork>>) : WifiScanner {

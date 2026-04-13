@@ -5,7 +5,7 @@ plugins {
 }
 
 android {
-    namespace = "com.example.wifi"
+    namespace = "com.dm.labs.wifi"
     compileSdk {
         version = release(36) {
             minorApiLevel = 1
@@ -13,7 +13,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.example.wifi"
+        applicationId = "com.dm.labs.wifi"
         minSdk = 24
         targetSdk = 36
         versionCode = 1
@@ -35,7 +35,7 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    
+
     buildFeatures {
         compose = true
     }

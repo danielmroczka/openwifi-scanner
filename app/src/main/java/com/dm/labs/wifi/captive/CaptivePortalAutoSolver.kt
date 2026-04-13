@@ -29,7 +29,7 @@ class CaptivePortalAutoSolver(
         }
 
         ScanLogManager.log("HTTP solve failed. Launching interactive solver…")
-        CaptivePortalSolverActivity.launch(context)
+        CaptivePortalSolverActivity.launch(context, ssid = "AutoDetected")
 
         return waitForResolution(timeoutMs = 120_000L)
     }

@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -32,29 +33,55 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import com.dm.labs.wifi.data.AppDatabase
+import com.dm.labs.wifi.data.CaptivePortalStepEntity
+import com.dm.labs.wifi.data.RoomCaptivePortalSolutionRepository
 import com.dm.labs.wifi.log.ScanLogManager
 import com.dm.labs.wifi.ui.theme.WIFITheme
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class CaptivePortalSolverActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        val ssid = intent.getStringExtra(EXTRA_SSID) ?: "Unknown"
+        val replaySolutionId = intent.getLongExtra(EXTRA_REPLAY_SOLUTION_ID, -1L)
+
         setContent {
             WIFITheme {
-                CaptivePortalSolverScreen(onClose = { finish() })
+                CaptivePortalSolverScreen(
+                    ssid = ssid,
+                    replaySolutionId = replaySolutionId,
+                    onClose = { finish() }
+                )
             }
         }
     }
 
     companion object {
         const val PORTAL_CHECK_URL = "http://connectivitycheck.gstatic.com/generate_204"
+        const val EXTRA_SSID = "extra_ssid"
+        const val EXTRA_REPLAY_SOLUTION_ID = "extra_replay_solution_id"
 
-        fun launch(context: Context) {
+        fun launch(context: Context, ssid: String = "Unknown") {
             context.startActivity(
                 Intent(context, CaptivePortalSolverActivity::class.java).apply {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                    putExtra(EXTRA_SSID, ssid)
+                }
+            )
+        }
+
+        fun launchReplay(context: Context, ssid: String, solutionId: Long) {
+            context.startActivity(
+                Intent(context, CaptivePortalSolverActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                    putExtra(EXTRA_SSID, ssid)
+                    putExtra(EXTRA_REPLAY_SOLUTION_ID, solutionId)
                 }
             )
         }
@@ -63,11 +90,35 @@ class CaptivePortalSolverActivity : ComponentActivity() {
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-private fun CaptivePortalSolverScreen(onClose: () -> Unit) {
+private fun CaptivePortalSolverScreen(
+    ssid: String,
+    replaySolutionId: Long,
+    onClose: () -> Unit
+) {
     val context = LocalContext.current
     var status by remember { mutableStateOf("Loading portal page…") }
     val scope = rememberCoroutineScope()
 
+    val db = remember { AppDatabase.getDatabase(context) }
+    val solutionRepo = remember { RoomCaptivePortalSolutionRepository(db.captivePortalSolutionDao()) }
+    val recorder = remember { CaptivePortalRecorder(solutionRepo, scope) }
+
+    var isRecording by remember { mutableStateOf(false) }
+    val isReplayMode = replaySolutionId > 0
+    var replaySteps by remember { mutableStateOf<List<CaptivePortalStepEntity>>(emptyList()) }
+
+    // Load replay steps if in replay mode
+    LaunchedEffect(replaySolutionId) {
+        if (isReplayMode) {
+            val data = withContext(Dispatchers.IO) {
+                solutionRepo.getSolutionWithSteps(replaySolutionId)
+            }
+            replaySteps = data?.steps ?: emptyList()
+            status = "Replay mode: ${replaySteps.size} steps loaded"
+        }
+    }
+
+    // Monitor for internet connectivity
     LaunchedEffect(Unit) {
         val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         while (isActive) {
@@ -76,6 +127,10 @@ private fun CaptivePortalSolverScreen(onClose: () -> Unit) {
             val caps = net?.let { cm.getNetworkCapabilities(it) }
             if (caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true) {
                 ScanLogManager.log("Captive portal resolved via solver.")
+                if (isRecording) {
+                    recorder.stopRecording()
+                    isRecording = false
+                }
                 status = "Internet connected! Closing…"
                 delay(1_000)
                 onClose()
@@ -86,18 +141,58 @@ private fun CaptivePortalSolverScreen(onClose: () -> Unit) {
 
     Scaffold(
         topBar = {
-            Row(
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
             ) {
-                Column {
-                    Text("Captive Portal Solver", style = MaterialTheme.typography.titleMedium)
-                    Text(status, style = MaterialTheme.typography.bodySmall)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Captive Portal Solver", style = MaterialTheme.typography.titleMedium)
+                        Text("Network: $ssid", style = MaterialTheme.typography.bodySmall)
+                        Text(status, style = MaterialTheme.typography.bodySmall)
+                    }
+                    Button(onClick = {
+                        if (isRecording) {
+                            recorder.stopRecording()
+                            isRecording = false
+                        }
+                        onClose()
+                    }) { Text("Close") }
                 }
-                Button(onClick = onClose) { Text("Close") }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    if (!isReplayMode) {
+                        Button(
+                            onClick = {
+                                if (isRecording) {
+                                    recorder.stopRecording()
+                                    isRecording = false
+                                    status = "Recording saved!"
+                                } else {
+                                    recorder.startRecording(ssid, CaptivePortalSolverActivity.PORTAL_CHECK_URL)
+                                    isRecording = true
+                                    status = "\uD83D\uDD34 Recording steps…"
+                                }
+                            },
+                            colors = if (isRecording) {
+                                ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                            } else {
+                                ButtonDefaults.buttonColors()
+                            }
+                        ) {
+                            Text(if (isRecording) "\u23F9 Stop Recording" else "\u23FA Record Steps")
+                        }
+                    }
+                }
             }
         }
     ) { padding ->
@@ -111,15 +206,37 @@ private fun CaptivePortalSolverScreen(onClose: () -> Unit) {
                     settings.domStorageEnabled = true
                     settings.javaScriptCanOpenWindowsAutomatically = true
 
+                    // Add the recorder bridge
+                    addJavascriptInterface(recorder, "AndroidRecorder")
+
                     webViewClient = object : WebViewClient() {
                         override fun onPageFinished(view: WebView?, url: String?) {
                             super.onPageFinished(view, url)
-                            status = "Auto-solving…"
+
                             view?.let { wv ->
-                                injectSolverJs(wv)
-                                scope.launch {
-                                    delay(3_000)
+                                if (isReplayMode && replaySteps.isNotEmpty()) {
+                                    // Replay mode: inject replay script
+                                    status = "Replaying ${replaySteps.size} steps…"
+                                    val replayJs = CaptivePortalRecorder.getReplayJs(replaySteps)
+                                    wv.evaluateJavascript(replayJs, null)
+                                } else {
+                                    // Record navigation if recording
+                                    if (isRecording && url != null) {
+                                        recorder.onNavigation(url)
+                                    }
+
+                                    // Inject recording JS
+                                    wv.evaluateJavascript(
+                                        CaptivePortalRecorder.getRecordingJs(), null
+                                    )
+
+                                    // Also try auto-solve
+                                    status = if (isRecording) "\uD83D\uDD34 Recording… Auto-solving…" else "Auto-solving…"
                                     injectSolverJs(wv)
+                                    scope.launch {
+                                        delay(3_000)
+                                        injectSolverJs(wv)
+                                    }
                                 }
                             }
                         }
@@ -199,4 +316,3 @@ private fun injectSolverJs(webView: WebView) {
 
     webView.evaluateJavascript(js, null)
 }
-

@@ -42,8 +42,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -65,11 +65,18 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.core.content.PermissionChecker
 import androidx.core.net.toUri
+import android.widget.Toast
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.launch
 import com.dm.labs.wifi.approval.UserNetworkDecision
 import com.dm.labs.wifi.autoconnect.AutoConnectService
 import com.dm.labs.wifi.captive.CaptivePortalSolverActivity
 import com.dm.labs.wifi.data.AppDatabase
+import com.dm.labs.wifi.data.CaptivePortalSolutionEntity
+import com.dm.labs.wifi.data.CaptivePortalStepEntity
+import com.dm.labs.wifi.data.RoomCaptivePortalSolutionRepository
 import com.dm.labs.wifi.data.RoomWifiNetworkRepository
 import com.dm.labs.wifi.data.WifiNetworkEntity
 import com.dm.labs.wifi.log.ScanLog
@@ -91,6 +98,7 @@ class MainActivity : ComponentActivity() {
             WIFITheme {
                 val db = remember { AppDatabase.getDatabase(applicationContext) }
                 val repository = remember { RoomWifiNetworkRepository(db.wifiNetworkDao()) }
+                val solutionRepository = remember { RoomCaptivePortalSolutionRepository(db.captivePortalSolutionDao()) }
                 val appSettings = remember { AppSettings.getInstance(applicationContext) }
 
                 val vm: WifiViewModel = viewModel(
@@ -99,6 +107,7 @@ class MainActivity : ComponentActivity() {
                         connector = AndroidWifiConnector(applicationContext),
                         captivePortalChecker = AndroidCaptivePortalChecker(applicationContext),
                         repository = repository,
+                        solutionRepository = solutionRepository,
                         appContext = applicationContext,
                         appSettings = appSettings
                     )
@@ -109,6 +118,42 @@ class MainActivity : ComponentActivity() {
                 var selectedTabIndex by remember { mutableStateOf(0) }
                 var showSettingsDialog by remember { mutableStateOf(false) }
                 var showOverflowMenu by remember { mutableStateOf(false) }
+
+                // --- Solutions import/export state ---
+                var exportJson by remember { mutableStateOf("") }
+                var exportFileName by remember { mutableStateOf("solution.json") }
+                val scope = rememberCoroutineScope()
+
+                val exportDocLauncher = rememberLauncherForActivityResult(
+                    contract = ActivityResultContracts.CreateDocument("application/json")
+                ) { uri ->
+                    if (uri != null && exportJson.isNotEmpty()) {
+                        try {
+                            contentResolver.openOutputStream(uri)?.use { out ->
+                                out.write(exportJson.toByteArray())
+                            }
+                            Toast.makeText(this@MainActivity, "Exported successfully", Toast.LENGTH_SHORT).show()
+                        } catch (e: Exception) {
+                            Toast.makeText(this@MainActivity, "Export failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }
+
+                val importDocLauncher = rememberLauncherForActivityResult(
+                    contract = ActivityResultContracts.OpenDocument()
+                ) { uri ->
+                    if (uri != null) {
+                        scope.launch {
+                            try {
+                                val json = contentResolver.openInputStream(uri)?.bufferedReader()?.readText() ?: ""
+                                val count = vm.importSolutionsFromJson(json)
+                                Toast.makeText(this@MainActivity, "Imported $count solution(s)", Toast.LENGTH_SHORT).show()
+                            } catch (e: Exception) {
+                                Toast.makeText(this@MainActivity, "Import failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }
+                }
 
                 val permissionsLauncher = rememberLauncherForActivityResult(
                     contract = ActivityResultContracts.RequestMultiplePermissions()
@@ -125,7 +170,7 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                val tabTitles = listOf("Scanner", "Whitelist", "Blacklist", "Logs")
+                val tabTitles = listOf("Scanner", "Whitelist", "Blacklist", "Solutions", "Logs")
 
                 state.pendingApproval?.let { pending ->
                     AlertDialog(
@@ -200,7 +245,10 @@ class MainActivity : ComponentActivity() {
                     }
                 ) { innerPadding ->
                     Column(modifier = Modifier.padding(innerPadding)) {
-                        TabRow(selectedTabIndex = selectedTabIndex) {
+                        ScrollableTabRow(
+                            selectedTabIndex = selectedTabIndex,
+                            edgePadding = 0.dp
+                        ) {
                             tabTitles.forEachIndexed { index, title ->
                                 Tab(
                                     selected = selectedTabIndex == index,
@@ -246,7 +294,44 @@ class MainActivity : ComponentActivity() {
                                 modifier = Modifier.weight(1f)
                             )
 
-                            3 -> LogsScreen(
+                            3 -> SolutionsScreen(
+                                solutions = state.solutions,
+                                selectedDetail = state.selectedSolutionDetail,
+                                onOpenDetail = vm::loadSolutionDetail,
+                                onCloseDetail = vm::closeSolutionDetail,
+                                onReplay = { sol ->
+                                    CaptivePortalSolverActivity.launchReplay(
+                                        this@MainActivity, sol.ssid, sol.id
+                                    )
+                                },
+                                onDelete = vm::deleteSolution,
+                                onUpdateSolutionInfo = vm::updateSolutionInfo,
+                                onUpdateStep = vm::updateStep,
+                                onDeleteStep = vm::deleteStep,
+                                onExport = { sol ->
+                                    scope.launch {
+                                        val json = vm.exportSolutionToJson(sol.id)
+                                        if (json != null) {
+                                            exportJson = json
+                                            exportFileName = "captive_solution_${sol.ssid}_${sol.id}.json"
+                                            exportDocLauncher.launch(exportFileName)
+                                        }
+                                    }
+                                },
+                                onExportAll = {
+                                    scope.launch {
+                                        val json = vm.exportAllSolutionsToJson()
+                                        exportJson = json
+                                        exportFileName = "all_captive_solutions.json"
+                                        exportDocLauncher.launch(exportFileName)
+                                    }
+                                },
+                                onImport = { importDocLauncher.launch(arrayOf("application/json", "*/*")) },
+                                onRefresh = vm::refreshSolutions,
+                                modifier = Modifier.weight(1f)
+                            )
+
+                            4 -> LogsScreen(
                                 logs = logs,
                                 onClearLogs = { ScanLogManager.clearLogs() },
                                 modifier = Modifier.weight(1f)
@@ -631,6 +716,751 @@ fun NetworkListScreen(
             }
         }
     }
+}
+
+@Composable
+fun SolutionsScreen(
+    solutions: List<CaptivePortalSolutionEntity>,
+    selectedDetail: com.dm.labs.wifi.data.SolutionWithSteps?,
+    onOpenDetail: (Long) -> Unit,
+    onCloseDetail: () -> Unit,
+    onReplay: (CaptivePortalSolutionEntity) -> Unit,
+    onDelete: (Long) -> Unit,
+    onUpdateSolutionInfo: (Long, String, String, String) -> Unit,
+    onUpdateStep: (CaptivePortalStepEntity) -> Unit,
+    onDeleteStep: (Long, Long) -> Unit,
+    onExport: (CaptivePortalSolutionEntity) -> Unit,
+    onExportAll: () -> Unit,
+    onImport: () -> Unit,
+    onRefresh: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    LaunchedEffect(Unit) { onRefresh() }
+
+    if (selectedDetail != null) {
+        SolutionDetailScreen(
+            detail = selectedDetail,
+            onBack = onCloseDetail,
+            onReplay = { onReplay(selectedDetail.solution) },
+            onDelete = { onDelete(selectedDetail.solution.id) },
+            onExport = { onExport(selectedDetail.solution) },
+            onUpdateSolutionInfo = onUpdateSolutionInfo,
+            onUpdateStep = onUpdateStep,
+            onDeleteStep = onDeleteStep,
+            modifier = modifier
+        )
+    } else {
+        SolutionListScreen(
+            solutions = solutions,
+            onOpenDetail = onOpenDetail,
+            onReplay = onReplay,
+            onDelete = onDelete,
+            onExport = onExport,
+            onExportAll = onExportAll,
+            onImport = onImport,
+            modifier = modifier
+        )
+    }
+}
+
+@Composable
+private fun SolutionListScreen(
+    solutions: List<CaptivePortalSolutionEntity>,
+    onOpenDetail: (Long) -> Unit,
+    onReplay: (CaptivePortalSolutionEntity) -> Unit,
+    onDelete: (Long) -> Unit,
+    onExport: (CaptivePortalSolutionEntity) -> Unit,
+    onExportAll: () -> Unit,
+    onImport: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var confirmDelete by remember { mutableStateOf<CaptivePortalSolutionEntity?>(null) }
+    val dateFormat = remember {
+        java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault())
+    }
+
+    confirmDelete?.let { sol ->
+        AlertDialog(
+            onDismissRequest = { confirmDelete = null },
+            title = { Text("Delete Solution") },
+            text = { Text("Delete the recorded solution for \"${sol.ssid}\"?") },
+            confirmButton = {
+                TextButton(onClick = {
+                    onDelete(sol.id)
+                    confirmDelete = null
+                }) {
+                    Text("Delete", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDelete = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        Text(
+            text = "Portal Solutions (${solutions.size})",
+            style = MaterialTheme.typography.headlineSmall
+        )
+
+        Text(
+            text = "Record how you solve captive portals and share with others.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(bottom = 8.dp)
+        )
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Button(onClick = onImport) {
+                Text("\uD83D\uDCE5 Import")
+            }
+            if (solutions.isNotEmpty()) {
+                Button(onClick = onExportAll) {
+                    Text("\uD83D\uDCE4 Export All")
+                }
+            }
+        }
+
+        if (solutions.isEmpty()) {
+            Text(
+                text = "No recorded solutions yet.\n\nTo record:\n1. Connect to a network with a captive portal\n2. Open the Captive Portal Solver\n3. Tap \"\u23FA Record Steps\"\n4. Solve the portal manually\n5. Tap \"\u23F9 Stop Recording\"",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 24.dp)
+            )
+        }
+
+        LazyColumn(
+            modifier = Modifier
+                .weight(1f)
+                .padding(top = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            items(solutions, key = { it.id }) { solution ->
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onOpenDetail(solution.id) },
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant
+                    )
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = solution.ssid,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = "${solution.stepCount} steps recorded",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                            Text(
+                                text = "\uD83D\uDCCB",
+                                style = MaterialTheme.typography.titleLarge
+                            )
+                        }
+
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 6.dp))
+
+                        if (solution.description.isNotEmpty()) {
+                            Text(
+                                text = solution.description,
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        Text(
+                            text = "Portal: ${solution.portalUrl}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = "Created: ${dateFormat.format(java.util.Date(solution.createdAt))}",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Button(
+                                onClick = { onReplay(solution) },
+                                modifier = Modifier.weight(1f),
+                                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp)
+                            ) {
+                                Text("\u25B6 Replay", style = MaterialTheme.typography.labelSmall)
+                            }
+                            Button(
+                                onClick = { onExport(solution) },
+                                modifier = Modifier.weight(1f),
+                                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp)
+                            ) {
+                                Text("\uD83D\uDCE4 Export", style = MaterialTheme.typography.labelSmall)
+                            }
+                            Button(
+                                onClick = { confirmDelete = solution },
+                                modifier = Modifier.weight(1f),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.error
+                                ),
+                                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp)
+                            ) {
+                                Text("Delete", style = MaterialTheme.typography.labelSmall)
+                            }
+                        }
+
+                        // Tap hint
+                        Text(
+                            text = "Tap to view & edit steps →",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 4.dp),
+                            textAlign = TextAlign.End
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ─── Solution Detail / Edit Screen ───────────────────────────────────────────
+
+@Composable
+private fun SolutionDetailScreen(
+    detail: com.dm.labs.wifi.data.SolutionWithSteps,
+    onBack: () -> Unit,
+    onReplay: () -> Unit,
+    onDelete: () -> Unit,
+    onExport: () -> Unit,
+    onUpdateSolutionInfo: (Long, String, String, String) -> Unit,
+    onUpdateStep: (CaptivePortalStepEntity) -> Unit,
+    onDeleteStep: (Long, Long) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val solution = detail.solution
+    val steps = detail.steps
+
+    var showEditSolution by remember { mutableStateOf(false) }
+    var editingStep by remember { mutableStateOf<CaptivePortalStepEntity?>(null) }
+    var confirmDeleteStep by remember { mutableStateOf<CaptivePortalStepEntity?>(null) }
+    var confirmDeleteSolution by remember { mutableStateOf(false) }
+
+    // ── Edit Solution Dialog ──
+    if (showEditSolution) {
+        EditSolutionDialog(
+            solution = solution,
+            onDismiss = { showEditSolution = false },
+            onSave = { ssid, desc, portalUrl ->
+                onUpdateSolutionInfo(solution.id, ssid, desc, portalUrl)
+                showEditSolution = false
+            }
+        )
+    }
+
+    // ── Edit Step Dialog ──
+    editingStep?.let { step ->
+        EditStepDialog(
+            step = step,
+            onDismiss = { editingStep = null },
+            onSave = { updated ->
+                onUpdateStep(updated)
+                editingStep = null
+            }
+        )
+    }
+
+    // ── Confirm Delete Step ──
+    confirmDeleteStep?.let { step ->
+        AlertDialog(
+            onDismissRequest = { confirmDeleteStep = null },
+            title = { Text("Delete Step") },
+            text = { Text("Delete step #${step.stepOrder + 1} (${step.type})?") },
+            confirmButton = {
+                TextButton(onClick = {
+                    onDeleteStep(solution.id, step.id)
+                    confirmDeleteStep = null
+                }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDeleteStep = null }) { Text("Cancel") }
+            }
+        )
+    }
+
+    // ── Confirm Delete Solution ──
+    if (confirmDeleteSolution) {
+        AlertDialog(
+            onDismissRequest = { confirmDeleteSolution = false },
+            title = { Text("Delete Solution") },
+            text = { Text("Delete the entire solution for \"${solution.ssid}\" and all its steps?") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmDeleteSolution = false
+                    onDelete()
+                }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDeleteSolution = false }) { Text("Cancel") }
+            }
+        )
+    }
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        // ── Header with back ──
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            TextButton(onClick = onBack) {
+                Text("← Back")
+            }
+            Text(
+                text = "Solution Details",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(start = 8.dp)
+            )
+        }
+
+        // ── Solution info card ──
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 8.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.primaryContainer
+            )
+        ) {
+            Column(modifier = Modifier.padding(12.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = solution.ssid,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.weight(1f)
+                    )
+                    TextButton(onClick = { showEditSolution = true }) {
+                        Text("\u270F\uFE0F Edit")
+                    }
+                }
+                if (solution.description.isNotEmpty()) {
+                    Text(
+                        text = solution.description,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(top = 2.dp)
+                    )
+                }
+                Text(
+                    text = "Portal URL: ${solution.portalUrl}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = 2.dp)
+                )
+                Text(
+                    text = "${steps.size} steps",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(top = 2.dp)
+                )
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Button(
+                        onClick = onReplay,
+                        modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp)
+                    ) {
+                        Text("\u25B6 Replay", style = MaterialTheme.typography.labelSmall)
+                    }
+                    Button(
+                        onClick = onExport,
+                        modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp)
+                    ) {
+                        Text("\uD83D\uDCE4 Export", style = MaterialTheme.typography.labelSmall)
+                    }
+                    Button(
+                        onClick = { confirmDeleteSolution = true },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp)
+                    ) {
+                        Text("Delete", style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+            }
+        }
+
+        // ── Steps header ──
+        Text(
+            text = "Steps",
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(top = 4.dp, bottom = 4.dp)
+        )
+
+        if (steps.isEmpty()) {
+            Text(
+                text = "No steps recorded for this solution.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
+        // ── Steps list ──
+        LazyColumn(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            items(steps, key = { it.id }) { step ->
+                StepCard(
+                    step = step,
+                    onEdit = { editingStep = step },
+                    onDelete = { confirmDeleteStep = step }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun StepCard(
+    step: CaptivePortalStepEntity,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit
+) {
+    val typeIcon = when (step.type) {
+        "NAVIGATION" -> "\uD83C\uDF10"  // 🌐
+        "CLICK" -> "\uD83D\uDC46"       // 👆
+        "INPUT" -> "\u2328\uFE0F"         // ⌨️
+        "FORM_SUBMIT" -> "\uD83D\uDCE8"  // 📨
+        else -> "\u2753"                  // ❓
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface
+        )
+    ) {
+        Column(modifier = Modifier.padding(10.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "$typeIcon #${step.stepOrder + 1}",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "  ${step.type}",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+
+            if (step.url.isNotEmpty()) {
+                Text(
+                    text = "URL: ${step.url}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            if (step.cssSelector.isNotEmpty()) {
+                Text(
+                    text = "Selector: ${step.cssSelector}",
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            if (step.elementId.isNotEmpty()) {
+                Text(
+                    text = "Element ID: ${step.elementId}",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+            if (step.elementName.isNotEmpty()) {
+                Text(
+                    text = "Element Name: ${step.elementName}",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+            if (step.elementType.isNotEmpty()) {
+                Text(
+                    text = "Element Type: ${step.elementType}",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+            if (step.inputValue.isNotEmpty()) {
+                Text(
+                    text = "Value: ${step.inputValue}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.tertiary
+                )
+            }
+            if (step.formData.isNotEmpty()) {
+                Text(
+                    text = "Form data: ${step.formData}",
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 6.dp),
+                horizontalArrangement = Arrangement.End
+            ) {
+                TextButton(onClick = onEdit) {
+                    Text("\u270F\uFE0F Edit", style = MaterialTheme.typography.labelSmall)
+                }
+                TextButton(onClick = onDelete) {
+                    Text(
+                        "\uD83D\uDDD1\uFE0F Delete",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+            }
+        }
+    }
+}
+
+// ─── Edit Solution Dialog ────────────────────────────────────────────────────
+
+@Composable
+private fun EditSolutionDialog(
+    solution: CaptivePortalSolutionEntity,
+    onDismiss: () -> Unit,
+    onSave: (ssid: String, description: String, portalUrl: String) -> Unit
+) {
+    var ssid by remember(solution.id) { mutableStateOf(solution.ssid) }
+    var description by remember(solution.id) { mutableStateOf(solution.description) }
+    var portalUrl by remember(solution.id) { mutableStateOf(solution.portalUrl) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Edit Solution") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = ssid,
+                    onValueChange = { ssid = it },
+                    label = { Text("SSID") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = description,
+                    onValueChange = { description = it },
+                    label = { Text("Description") },
+                    modifier = Modifier.fillMaxWidth(),
+                    maxLines = 3
+                )
+                OutlinedTextField(
+                    value = portalUrl,
+                    onValueChange = { portalUrl = it },
+                    label = { Text("Portal URL") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onSave(ssid, description, portalUrl) }) {
+                Text("Save")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        }
+    )
+}
+
+// ─── Edit Step Dialog ────────────────────────────────────────────────────────
+
+@Composable
+private fun EditStepDialog(
+    step: CaptivePortalStepEntity,
+    onDismiss: () -> Unit,
+    onSave: (CaptivePortalStepEntity) -> Unit
+) {
+    var type by remember(step.id) { mutableStateOf(step.type) }
+    var url by remember(step.id) { mutableStateOf(step.url) }
+    var cssSelector by remember(step.id) { mutableStateOf(step.cssSelector) }
+    var inputValue by remember(step.id) { mutableStateOf(step.inputValue) }
+    var elementId by remember(step.id) { mutableStateOf(step.elementId) }
+    var elementName by remember(step.id) { mutableStateOf(step.elementName) }
+    var elementType by remember(step.id) { mutableStateOf(step.elementType) }
+    var formData by remember(step.id) { mutableStateOf(step.formData) }
+
+    var showTypeDropdown by remember { mutableStateOf(false) }
+    val stepTypes = listOf("NAVIGATION", "CLICK", "INPUT", "FORM_SUBMIT")
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Edit Step #${step.stepOrder + 1}") },
+        text = {
+            LazyColumn(
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                item {
+                    // Type selector
+                    Column {
+                        Text("Type", style = MaterialTheme.typography.labelMedium)
+                        Button(onClick = { showTypeDropdown = true }) {
+                            Text(type)
+                        }
+                        DropdownMenu(
+                            expanded = showTypeDropdown,
+                            onDismissRequest = { showTypeDropdown = false }
+                        ) {
+                            stepTypes.forEach { t ->
+                                DropdownMenuItem(
+                                    text = { Text(t) },
+                                    onClick = {
+                                        type = t
+                                        showTypeDropdown = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+                item {
+                    OutlinedTextField(
+                        value = url,
+                        onValueChange = { url = it },
+                        label = { Text("URL") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+                item {
+                    OutlinedTextField(
+                        value = cssSelector,
+                        onValueChange = { cssSelector = it },
+                        label = { Text("CSS Selector") },
+                        modifier = Modifier.fillMaxWidth(),
+                        maxLines = 3
+                    )
+                }
+                item {
+                    OutlinedTextField(
+                        value = elementId,
+                        onValueChange = { elementId = it },
+                        label = { Text("Element ID") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+                item {
+                    OutlinedTextField(
+                        value = elementName,
+                        onValueChange = { elementName = it },
+                        label = { Text("Element Name") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+                item {
+                    OutlinedTextField(
+                        value = elementType,
+                        onValueChange = { elementType = it },
+                        label = { Text("Element Type") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+                item {
+                    OutlinedTextField(
+                        value = inputValue,
+                        onValueChange = { inputValue = it },
+                        label = { Text("Input Value") },
+                        modifier = Modifier.fillMaxWidth(),
+                        maxLines = 2
+                    )
+                }
+                item {
+                    OutlinedTextField(
+                        value = formData,
+                        onValueChange = { formData = it },
+                        label = { Text("Form Data (JSON)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        maxLines = 4
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                onSave(
+                    step.copy(
+                        type = type,
+                        url = url,
+                        cssSelector = cssSelector,
+                        inputValue = inputValue,
+                        elementId = elementId,
+                        elementName = elementName,
+                        elementType = elementType,
+                        formData = formData
+                    )
+                )
+            }) {
+                Text("Save")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        }
+    )
 }
 
 @Composable

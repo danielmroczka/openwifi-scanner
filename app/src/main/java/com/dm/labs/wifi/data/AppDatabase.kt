@@ -5,9 +5,18 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 
-@Database(entities = [WifiNetworkEntity::class], version = 4, exportSchema = false)
+@Database(
+    entities = [
+        WifiNetworkEntity::class,
+        CaptivePortalSolutionEntity::class,
+        CaptivePortalStepEntity::class
+    ],
+    version = 5,
+    exportSchema = false
+)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun wifiNetworkDao(): WifiNetworkDao
+    abstract fun captivePortalSolutionDao(): CaptivePortalSolutionDao
 
     companion object {
         @Volatile

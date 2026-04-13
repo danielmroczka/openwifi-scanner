@@ -8,6 +8,10 @@ import com.dm.labs.wifi.approval.NetworkApprovalManager
 import com.dm.labs.wifi.approval.PendingNetworkApproval
 import com.dm.labs.wifi.approval.UserNetworkDecision
 import com.dm.labs.wifi.autoconnect.AutoConnectRuntime
+import com.dm.labs.wifi.data.CaptivePortalSolutionEntity
+import com.dm.labs.wifi.data.CaptivePortalSolutionRepository
+import com.dm.labs.wifi.data.CaptivePortalStepEntity
+import com.dm.labs.wifi.data.SolutionWithSteps
 import com.dm.labs.wifi.data.WifiNetworkEntity
 import com.dm.labs.wifi.data.WifiNetworkRepository
 import com.dm.labs.wifi.location.LocationProvider
@@ -44,7 +48,9 @@ data class WifiUiState(
     val whitelistedBssids: Set<String> = emptySet(),
     val blacklistedNetworks: List<WifiNetworkEntity> = emptyList(),
     val whitelistedNetworks: List<WifiNetworkEntity> = emptyList(),
-    val pendingApproval: PendingNetworkApproval? = null
+    val pendingApproval: PendingNetworkApproval? = null,
+    val solutions: List<CaptivePortalSolutionEntity> = emptyList(),
+    val selectedSolutionDetail: SolutionWithSteps? = null
 )
 
 class WifiViewModel(
@@ -53,6 +59,7 @@ class WifiViewModel(
     private val captivePortalChecker: CaptivePortalChecker,
     private val autoConnectStateSource: AutoConnectStateSource = AutoConnectRuntime,
     private val repository: WifiNetworkRepository? = null,
+    private val solutionRepository: CaptivePortalSolutionRepository? = null,
     private val appContext: Context? = null,
     private val appSettings: AppSettings? = null
 ) : ViewModel() {
@@ -274,6 +281,71 @@ class WifiViewModel(
                 )
             }
         }
+        refreshSolutions()
+    }
+
+    fun refreshSolutions() {
+        viewModelScope.launch {
+            val solRepo = solutionRepository ?: return@launch
+            val solutions = solRepo.getAllSolutions()
+            _uiState.update { it.copy(solutions = solutions) }
+        }
+    }
+
+    fun deleteSolution(solutionId: Long) {
+        viewModelScope.launch {
+            solutionRepository?.deleteSolution(solutionId)
+            _uiState.update { it.copy(selectedSolutionDetail = null) }
+            refreshSolutions()
+        }
+    }
+
+    fun loadSolutionDetail(solutionId: Long) {
+        viewModelScope.launch {
+            val detail = solutionRepository?.getSolutionWithSteps(solutionId)
+            _uiState.update { it.copy(selectedSolutionDetail = detail) }
+        }
+    }
+
+    fun closeSolutionDetail() {
+        _uiState.update { it.copy(selectedSolutionDetail = null) }
+        refreshSolutions()
+    }
+
+    fun updateSolutionInfo(solutionId: Long, ssid: String, description: String, portalUrl: String) {
+        viewModelScope.launch {
+            solutionRepository?.updateSolutionInfo(solutionId, ssid, description, portalUrl)
+            loadSolutionDetail(solutionId)
+            refreshSolutions()
+        }
+    }
+
+    fun updateStep(step: CaptivePortalStepEntity) {
+        viewModelScope.launch {
+            solutionRepository?.updateStep(step)
+            loadSolutionDetail(step.solutionId)
+        }
+    }
+
+    fun deleteStep(solutionId: Long, stepId: Long) {
+        viewModelScope.launch {
+            solutionRepository?.deleteStep(solutionId, stepId)
+            loadSolutionDetail(solutionId)
+        }
+    }
+
+    suspend fun exportSolutionToJson(solutionId: Long): String? {
+        return solutionRepository?.exportToJson(solutionId)
+    }
+
+    suspend fun exportAllSolutionsToJson(): String {
+        return solutionRepository?.exportAllToJson() ?: "{}"
+    }
+
+    suspend fun importSolutionsFromJson(json: String): Int {
+        val count = solutionRepository?.importFromJson(json) ?: 0
+        refreshSolutions()
+        return count
     }
 }
 
@@ -283,6 +355,7 @@ class WifiViewModelFactory(
     private val captivePortalChecker: CaptivePortalChecker,
     private val autoConnectStateSource: AutoConnectStateSource = AutoConnectRuntime,
     private val repository: WifiNetworkRepository? = null,
+    private val solutionRepository: CaptivePortalSolutionRepository? = null,
     private val appContext: Context? = null,
     private val appSettings: AppSettings? = null
 ) : ViewModelProvider.Factory {
@@ -294,6 +367,7 @@ class WifiViewModelFactory(
             captivePortalChecker,
             autoConnectStateSource,
             repository,
+            solutionRepository,
             appContext,
             appSettings
         ) as T

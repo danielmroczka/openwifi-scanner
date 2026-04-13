@@ -94,7 +94,7 @@ class AutoConnectCoordinator(
 
         // Log only when we find open networks (user-facing log)
         if (allNetworks.isNotEmpty()) {
-            ScanLogManager.log("Found ${allNetworks.size} open network(s), ${networks.size} eligible.")
+            ScanLogManager.log("Background scan found ${allNetworks.size} open networks")
         }
 
         var attempts = previousAttempts
@@ -146,13 +146,15 @@ class AutoConnectCoordinator(
                     message = "Trying ${network.ssid}…"
                 )
             )
+            // user-facing log for attempts
+            ScanLogManager.log("Trying ${network.ssid}")
 
             when (val connect = connector.connectToOpenNetwork(network.ssid)) {
                 ConnectAttemptResult.Connected -> {
                     DevLog.i("WiFi associated with ${network.ssid}, checking internet…")
                     val validated = waitForValidatedInternet(stopSignal)
                     if (validated) {
-                        ScanLogManager.log("Connected to ${network.ssid} with internet access.")
+                        ScanLogManager.log("Connected to ${network.ssid} with validated internet")
                         DevLog.i("Internet validated on ${network.ssid}")
                         return BackgroundAutoConnectState(
                             isRunning = true,
@@ -180,7 +182,7 @@ class AutoConnectCoordinator(
                         // No internet and no captive portal → put on 1h cooldown
                         connector.disconnectCurrentNetwork()
                         NetworkCooldownManager.putOnCooldown(network.ssid)
-                        ScanLogManager.log("No internet on ${network.ssid} — network on 1h cooldown.")
+                        ScanLogManager.log("No internet on ${network.ssid}, disconnected")
                         DevLog.w("No internet on ${network.ssid} (status=$portalStatus), disconnected and put on 1h cooldown.")
                     }
                 }

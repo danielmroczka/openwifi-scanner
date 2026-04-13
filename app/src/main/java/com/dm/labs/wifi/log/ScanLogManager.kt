@@ -16,8 +16,11 @@ object ScanLogManager {
 
     // Suppress exact-duplicate messages that occur frequently to avoid noisy logs
     // (e.g. repeated scans every few seconds with identical content). If the
-    // same message is logged again within SUPPRESSION_MS, it will be ignored.
-    private const val SUPPRESSION_MS = 60_000L // 1 minute
+    // same message is logged again within `suppressionWindowMs`, it will be ignored.
+    @Volatile
+    var suppressionWindowMs: Long = 60_000L // 1 minute; mutable for tests
+        private set
+
     @Volatile
     private var lastMessage: String? = null
     @Volatile
@@ -26,7 +29,7 @@ object ScanLogManager {
     fun log(message: String) {
         val now = System.currentTimeMillis()
         val lm = lastMessage
-        if (lm != null && lm == message && now - lastMessageTs < SUPPRESSION_MS) {
+        if (lm != null && lm == message && now - lastMessageTs < suppressionWindowMs) {
             // skip noisy duplicate
             return
         }
@@ -40,6 +43,14 @@ object ScanLogManager {
 
     fun clearLogs() {
         _logs.value = emptyList()
+        // reset suppression state so subsequent tests or runs are not affected
+        lastMessage = null
+        lastMessageTs = 0L
+    }
+
+    /** For tests: temporarily set suppression window (ms). */
+    fun setSuppressionWindow(ms: Long) {
+        suppressionWindowMs = ms
     }
 }
 

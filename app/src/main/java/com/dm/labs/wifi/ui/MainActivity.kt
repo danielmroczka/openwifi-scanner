@@ -306,8 +306,9 @@ class MainActivity : ComponentActivity() {
                             1 -> NetworksScreen(
                                 whitelistedNetworks = state.whitelistedNetworks,
                                 blacklistedNetworks = state.blacklistedNetworks,
-                                onRemoveWhitelisted = { vm.removeNetwork(it.bssid) },
-                                onRemoveBlacklisted = { vm.removeNetwork(it.bssid) },
+                                onDeleteNetwork = vm::deleteNetworkPermanent,
+                                onBlockNetwork = vm::blockNetwork,
+                                onUnblockToFavourite = vm::unblockNetworkToFavourite,
                                 selectedDetail = state.selectedNetworkDetail,
                                 onOpenDetail = vm::loadNetworkDetail,
                                 onCloseDetail = vm::closeNetworkDetail,
@@ -626,8 +627,9 @@ fun WifiScreen(
 fun NetworksScreen(
     whitelistedNetworks: List<WifiNetworkEntity>,
     blacklistedNetworks: List<WifiNetworkEntity>,
-    onRemoveWhitelisted: (WifiNetworkEntity) -> Unit,
-    onRemoveBlacklisted: (WifiNetworkEntity) -> Unit,
+    onDeleteNetwork: (WifiNetworkEntity) -> Unit,
+    onBlockNetwork: (WifiNetworkEntity) -> Unit,
+    onUnblockToFavourite: (WifiNetworkEntity) -> Unit,
     selectedDetail: Pair<WifiNetworkEntity, List<CaptivePortalSolutionEntity>>?,
     onOpenDetail: (WifiNetworkEntity) -> Unit,
     onCloseDetail: () -> Unit,
@@ -637,13 +639,22 @@ fun NetworksScreen(
     var showWhitelist by remember { mutableStateOf(true) }
 
     if (selectedDetail != null) {
+        val network = selectedDetail.first
         NetworkDetailScreen(
-            network = selectedDetail.first,
+            network = network,
             solutions = selectedDetail.second,
             onBack = onCloseDetail,
-            onForget = {
-                if (showWhitelist) onRemoveWhitelisted(selectedDetail.first)
-                else onRemoveBlacklisted(selectedDetail.first)
+            isBlockedNetwork = network.isBlacklisted,
+            onDelete = {
+                onDeleteNetwork(network)
+                onCloseDetail()
+            },
+            onBlock = {
+                onBlockNetwork(network)
+                onCloseDetail()
+            },
+            onUnblockToFavourite = {
+                onUnblockToFavourite(network)
                 onCloseDetail()
             },
             onReplaySolution = onReplaySolution,
@@ -680,7 +691,6 @@ fun NetworksScreen(
             NetworkListContent(
                 emptyMessage = "No favourite networks yet.\nFavourite a network from the Scanner tab.",
                 networks = whitelistedNetworks,
-                onRemove = onRemoveWhitelisted,
                 onTap = onOpenDetail,
                 modifier = Modifier.weight(1f)
             )
@@ -688,7 +698,6 @@ fun NetworksScreen(
             NetworkListContent(
                 emptyMessage = "No blocked networks yet.\nBlock a network from the Scanner tab.",
                 networks = blacklistedNetworks,
-                onRemove = onRemoveBlacklisted,
                 onTap = onOpenDetail,
                 modifier = Modifier.weight(1f)
             )
@@ -700,32 +709,11 @@ fun NetworksScreen(
 private fun NetworkListContent(
     emptyMessage: String,
     networks: List<WifiNetworkEntity>,
-    onRemove: (WifiNetworkEntity) -> Unit,
     onTap: (WifiNetworkEntity) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    var confirmForget by remember { mutableStateOf<WifiNetworkEntity?>(null) }
     val dateFormat = remember {
         java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault())
-    }
-
-    confirmForget?.let { network ->
-        AlertDialog(
-            onDismissRequest = { confirmForget = null },
-            title = { Text("Forget Network") },
-            text = { Text("Remove ${network.ssid} completely? It will no longer appear in any list.") },
-            confirmButton = {
-                TextButton(onClick = {
-                    onRemove(network)
-                    confirmForget = null
-                }) {
-                    Text("Forget", color = MaterialTheme.colorScheme.error)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirmForget = null }) { Text("Cancel") }
-            }
-        )
     }
 
     if (networks.isEmpty()) {
@@ -789,28 +777,77 @@ private fun NetworkDetailScreen(
     network: WifiNetworkEntity,
     solutions: List<CaptivePortalSolutionEntity>,
     onBack: () -> Unit,
-    onForget: () -> Unit,
+    isBlockedNetwork: Boolean,
+    onDelete: () -> Unit,
+    onBlock: () -> Unit,
+    onUnblockToFavourite: () -> Unit,
     onReplaySolution: (CaptivePortalSolutionEntity) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val dateFormat = remember {
         java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault())
     }
-    var confirmForget by remember { mutableStateOf(false) }
+    var showDeleteConfirm by remember { mutableStateOf(false) }
+    var showBlockConfirm by remember { mutableStateOf(false) }
+    var showUnblockConfirm by remember { mutableStateOf(false) }
 
-    if (confirmForget) {
+    if (showDeleteConfirm) {
         AlertDialog(
-            onDismissRequest = { confirmForget = false },
-            title = { Text("Forget Network") },
-            text = { Text("Remove ${network.ssid} completely? It will no longer appear in any list.") },
+            onDismissRequest = { showDeleteConfirm = false },
+            title = { Text(if (isBlockedNetwork) "Delete Network" else "Forget Network") },
+            text = {
+                Text(
+                    if (isBlockedNetwork) {
+                        "Delete ${network.ssid} permanently? This action cannot be undone."
+                    } else {
+                        "Remove ${network.ssid} completely? It will no longer appear in any list."
+                    }
+                )
+            },
             confirmButton = {
                 TextButton(onClick = {
-                    confirmForget = false
-                    onForget()
-                }) { Text("Forget", color = MaterialTheme.colorScheme.error) }
+                    showDeleteConfirm = false
+                    onDelete()
+                }) {
+                    Text(if (isBlockedNetwork) "Delete" else "Forget", color = MaterialTheme.colorScheme.error)
+                }
             },
             dismissButton = {
-                TextButton(onClick = { confirmForget = false }) { Text("Cancel") }
+                TextButton(onClick = { showDeleteConfirm = false }) { Text("Cancel") }
+            }
+        )
+    }
+
+    if (showBlockConfirm) {
+        AlertDialog(
+            onDismissRequest = { showBlockConfirm = false },
+            title = { Text("Block Network") },
+            text = { Text("Block ${network.ssid}? It will be moved from favourites to blocked.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showBlockConfirm = false
+                    onBlock()
+                }) { Text("Block", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showBlockConfirm = false }) { Text("Cancel") }
+            }
+        )
+    }
+
+    if (showUnblockConfirm) {
+        AlertDialog(
+            onDismissRequest = { showUnblockConfirm = false },
+            title = { Text("Unblock Network") },
+            text = { Text("Unblock ${network.ssid} and move it to favourites?") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showUnblockConfirm = false
+                    onUnblockToFavourite()
+                }) { Text("Unblock") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showUnblockConfirm = false }) { Text("Cancel") }
             }
         )
     }
@@ -855,16 +892,17 @@ private fun NetworkDetailScreen(
                         modifier = Modifier.weight(1f)
                     )
                     val statusLabel = when {
-                        network.isWhitelisted -> "★ Favourite"
+                        network.isWhitelisted && network.isBlacklisted -> "★ Favourite / ✖ Blocked"
                         network.isBlacklisted -> "✖ Blocked"
+                        network.isWhitelisted -> "★ Favourite"
                         else -> ""
                     }
                     if (statusLabel.isNotEmpty()) {
                         Text(
                             text = statusLabel,
                             style = MaterialTheme.typography.labelSmall,
-                            color = if (network.isWhitelisted) MaterialTheme.colorScheme.primary
-                                    else MaterialTheme.colorScheme.error
+                            color = if (network.isBlacklisted) MaterialTheme.colorScheme.error
+                            else MaterialTheme.colorScheme.primary
                         )
                     }
                 }
@@ -899,15 +937,41 @@ private fun NetworkDetailScreen(
                 }
 
                 Spacer(modifier = Modifier.height(8.dp))
-                Button(
-                    onClick = { confirmForget = true },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.error
-                    ),
+                Row(
                     modifier = Modifier.fillMaxWidth(),
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Text("Forget network", style = MaterialTheme.typography.labelSmall)
+                    Button(
+                        onClick = { showDeleteConfirm = true },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.error
+                        ),
+                        modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                    ) {
+                        Text(if (isBlockedNetwork) "Delete" else "Forget", style = MaterialTheme.typography.labelSmall)
+                    }
+
+                    if (isBlockedNetwork) {
+                        Button(
+                            onClick = { showUnblockConfirm = true },
+                            modifier = Modifier.weight(1f),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                        ) {
+                            Text("Unblock", style = MaterialTheme.typography.labelSmall)
+                        }
+                    } else {
+                        Button(
+                            onClick = { showBlockConfirm = true },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.error
+                            ),
+                            modifier = Modifier.weight(1f),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                        ) {
+                            Text("Block", style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
                 }
             }
         }

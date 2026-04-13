@@ -287,6 +287,44 @@ class WifiViewModel(
         }
     }
 
+    fun deleteNetworkPermanent(network: WifiNetworkEntity) {
+        viewModelScope.launch {
+            val repo = repository ?: return@launch
+            repo.deleteNetwork(network.bssid)
+            refreshLists()
+        }
+    }
+
+    fun blockNetwork(network: WifiNetworkEntity) {
+        viewModelScope.launch {
+            val repo = repository ?: return@launch
+            val location = appContext?.let { LocationProvider.getLastKnownLocation(it) }
+            repo.setBlacklisted(
+                bssid = network.bssid,
+                ssid = network.ssid,
+                blacklisted = true,
+                latitude = location?.latitude,
+                longitude = location?.longitude
+            )
+            refreshLists()
+        }
+    }
+
+    fun unblockNetworkToFavourite(network: WifiNetworkEntity) {
+        viewModelScope.launch {
+            val repo = repository ?: return@launch
+            val location = appContext?.let { LocationProvider.getLastKnownLocation(it) }
+            repo.setWhitelisted(
+                bssid = network.bssid,
+                ssid = network.ssid,
+                whitelisted = true,
+                latitude = location?.latitude,
+                longitude = location?.longitude
+            )
+            refreshLists()
+        }
+    }
+
     fun refreshLists() {
         viewModelScope.launch {
             val repo = repository ?: return@launch

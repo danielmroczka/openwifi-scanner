@@ -24,9 +24,13 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -36,14 +40,15 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.ScrollableTabRow
-import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -88,6 +93,8 @@ import com.dm.labs.wifi.platform.AndroidWifiScanner
 import com.dm.labs.wifi.settings.AppSettings
 import com.dm.labs.wifi.ui.theme.WIFITheme
 
+private data class NavItem(val label: String, val icon: @Composable () -> Unit)
+
 class MainActivity : ComponentActivity() {
     @OptIn(ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -117,7 +124,6 @@ class MainActivity : ComponentActivity() {
                 var hasPermissions by remember { mutableStateOf(hasRequiredPermissions()) }
                 var selectedTabIndex by remember { mutableStateOf(0) }
                 var showSettingsDialog by remember { mutableStateOf(false) }
-                var showOverflowMenu by remember { mutableStateOf(false) }
 
                 // --- Solutions import/export state ---
                 var exportJson by remember { mutableStateOf("") }
@@ -170,8 +176,6 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                val tabTitles = listOf("Scanner", "Whitelist", "Blacklist", "Solutions", "Logs")
-
                 state.pendingApproval?.let { pending ->
                     AlertDialog(
                         onDismissRequest = { vm.handleApprovalDecision(UserNetworkDecision.SKIP) },
@@ -219,46 +223,51 @@ class MainActivity : ComponentActivity() {
                     )
                 }
 
+                val navItems = remember {
+                    listOf(
+                        NavItem("Scanner") { Icon(Icons.Default.Home, contentDescription = "Scanner") },
+                        NavItem("Networks") { Icon(Icons.Default.Favorite, contentDescription = "Networks") },
+                        NavItem("Solutions") { Icon(Icons.Default.PlayArrow, contentDescription = "Solutions") },
+                        NavItem("Logs") { Icon(Icons.Default.Info, contentDescription = "Logs") }
+                    )
+                }
+
                 Scaffold(
                     modifier = Modifier.fillMaxSize(),
                     topBar = {
                         TopAppBar(
-                            title = { Text("WiFi Scanner") },
+                            title = {
+                                Text(
+                                    when (selectedTabIndex) {
+                                        0 -> "WiFi Scanner"
+                                        1 -> "Saved Networks"
+                                        2 -> "Portal Solutions"
+                                        3 -> "Scan Logs"
+                                        else -> "WiFi Scanner"
+                                    }
+                                )
+                            },
                             actions = {
-                                IconButton(onClick = { showOverflowMenu = true }) {
-                                    Icon(Icons.Default.MoreVert, contentDescription = "Menu")
-                                }
-                                DropdownMenu(
-                                    expanded = showOverflowMenu,
-                                    onDismissRequest = { showOverflowMenu = false }
-                                ) {
-                                    DropdownMenuItem(
-                                        text = { Text("Settings") },
-                                        onClick = {
-                                            showOverflowMenu = false
-                                            showSettingsDialog = true
-                                        }
-                                    )
+                                IconButton(onClick = { showSettingsDialog = true }) {
+                                    Icon(Icons.Default.MoreVert, contentDescription = "Settings")
                                 }
                             }
                         )
+                    },
+                    bottomBar = {
+                        NavigationBar {
+                            navItems.forEachIndexed { index, item ->
+                                NavigationBarItem(
+                                    selected = selectedTabIndex == index,
+                                    onClick = { selectedTabIndex = index },
+                                    icon = item.icon,
+                                    label = { Text(item.label) }
+                                )
+                            }
+                        }
                     }
                 ) { innerPadding ->
                     Column(modifier = Modifier.padding(innerPadding)) {
-                        ScrollableTabRow(
-                            selectedTabIndex = selectedTabIndex,
-                            edgePadding = 0.dp
-                        ) {
-                            tabTitles.forEachIndexed { index, title ->
-                                Tab(
-                                    selected = selectedTabIndex == index,
-                                    onClick = { selectedTabIndex = index }
-                                ) {
-                                    Text(title, modifier = Modifier.padding(16.dp))
-                                }
-                            }
-                        }
-
                         when (selectedTabIndex) {
                             0 -> WifiScreen(
                                 state = state,
@@ -276,25 +285,16 @@ class MainActivity : ComponentActivity() {
                                 modifier = Modifier.weight(1f)
                             )
 
-                            1 -> NetworkListScreen(
-                                title = "Whitelisted Networks",
-                                emptyMessage = "No whitelisted networks yet.\nFavourite a network from the Scanner tab.",
-                                networks = state.whitelistedNetworks,
-                                onRemove = { vm.toggleWhitelist(it.bssid, it.ssid) },
+                            1 -> NetworksScreen(
+                                whitelistedNetworks = state.whitelistedNetworks,
+                                blacklistedNetworks = state.blacklistedNetworks,
+                                onRemoveWhitelisted = { vm.toggleWhitelist(it.bssid, it.ssid) },
+                                onRemoveBlacklisted = { vm.toggleBlacklist(it.bssid, it.ssid) },
                                 onDelete = vm::removeNetwork,
                                 modifier = Modifier.weight(1f)
                             )
 
-                            2 -> NetworkListScreen(
-                                title = "Blacklisted Networks",
-                                emptyMessage = "No blacklisted networks yet.\nBlock a network from the Scanner tab.",
-                                networks = state.blacklistedNetworks,
-                                onRemove = { vm.toggleBlacklist(it.bssid, it.ssid) },
-                                onDelete = vm::removeNetwork,
-                                modifier = Modifier.weight(1f)
-                            )
-
-                            3 -> SolutionsScreen(
+                            2 -> SolutionsScreen(
                                 solutions = state.solutions,
                                 selectedDetail = state.selectedSolutionDetail,
                                 onOpenDetail = vm::loadSolutionDetail,
@@ -331,7 +331,7 @@ class MainActivity : ComponentActivity() {
                                 modifier = Modifier.weight(1f)
                             )
 
-                            4 -> LogsScreen(
+                            3 -> LogsScreen(
                                 logs = logs,
                                 onClearLogs = { ScanLogManager.clearLogs() },
                                 modifier = Modifier.weight(1f)
@@ -570,8 +570,62 @@ fun WifiScreen(
 }
 
 @Composable
-fun NetworkListScreen(
-    title: String,
+fun NetworksScreen(
+    whitelistedNetworks: List<WifiNetworkEntity>,
+    blacklistedNetworks: List<WifiNetworkEntity>,
+    onRemoveWhitelisted: (WifiNetworkEntity) -> Unit,
+    onRemoveBlacklisted: (WifiNetworkEntity) -> Unit,
+    onDelete: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var showWhitelist by remember { mutableStateOf(true) }
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        // ── Filter chips toggle ──
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            FilterChip(
+                selected = showWhitelist,
+                onClick = { showWhitelist = true },
+                label = { Text("★ Favourites (${whitelistedNetworks.size})") }
+            )
+            FilterChip(
+                selected = !showWhitelist,
+                onClick = { showWhitelist = false },
+                label = { Text("✖ Blocked (${blacklistedNetworks.size})") }
+            )
+        }
+
+        if (showWhitelist) {
+            NetworkListContent(
+                emptyMessage = "No favourite networks yet.\nFavourite a network from the Scanner tab.",
+                networks = whitelistedNetworks,
+                onRemove = onRemoveWhitelisted,
+                onDelete = onDelete,
+                modifier = Modifier.weight(1f)
+            )
+        } else {
+            NetworkListContent(
+                emptyMessage = "No blocked networks yet.\nBlock a network from the Scanner tab.",
+                networks = blacklistedNetworks,
+                onRemove = onRemoveBlacklisted,
+                onDelete = onDelete,
+                modifier = Modifier.weight(1f)
+            )
+        }
+    }
+}
+
+@Composable
+private fun NetworkListContent(
     emptyMessage: String,
     networks: List<WifiNetworkEntity>,
     onRemove: (WifiNetworkEntity) -> Unit,
@@ -587,7 +641,7 @@ fun NetworkListScreen(
         AlertDialog(
             onDismissRequest = { confirmDelete = null },
             title = { Text("Delete Network") },
-            text = { Text("Remove ${network.ssid} (${network.bssid}) permanently from the database?") },
+            text = { Text("Remove ${network.ssid} (${network.bssid}) permanently?") },
             confirmButton = {
                 TextButton(onClick = {
                     onDelete(network.bssid)
@@ -597,119 +651,94 @@ fun NetworkListScreen(
                 }
             },
             dismissButton = {
-                TextButton(onClick = { confirmDelete = null }) {
-                    Text("Cancel")
-                }
+                TextButton(onClick = { confirmDelete = null }) { Text("Cancel") }
             }
         )
     }
 
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(16.dp)
-    ) {
+    if (networks.isEmpty()) {
         Text(
-            text = "$title (${networks.size})",
-            style = MaterialTheme.typography.headlineSmall,
-            modifier = Modifier.padding(bottom = 12.dp)
+            text = emptyMessage,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 24.dp)
         )
+    }
 
-        if (networks.isEmpty()) {
-            Text(
-                text = emptyMessage,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 24.dp)
-            )
-        }
-
-        LazyColumn(
-            modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            items(networks, key = { it.bssid }) { network ->
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant
+    LazyColumn(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        items(networks, key = { it.bssid }) { network ->
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant
+                )
+            ) {
+                Column(modifier = Modifier.padding(12.dp)) {
+                    Text(
+                        text = network.ssid,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold
                     )
-                ) {
-                    Column(modifier = Modifier.padding(12.dp)) {
+                    Text(
+                        text = "BSSID: ${network.bssid}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 6.dp))
+
+                    Text(
+                        text = "Added: ${dateFormat.format(java.util.Date(network.dateAdded))}",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Text(
+                        text = "Last connected: ${dateFormat.format(java.util.Date(network.lastConnected))}",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+
+                    if (network.latitude != null && network.longitude != null) {
                         Text(
-                            text = network.ssid,
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold
+                            text = "\uD83D\uDCCD ${
+                                String.format(java.util.Locale.US, "%.5f", network.latitude)
+                            }, ${
+                                String.format(java.util.Locale.US, "%.5f", network.longitude)
+                            }",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary
                         )
+                    } else {
                         Text(
-                            text = "BSSID: ${network.bssid}",
+                            text = "\uD83D\uDCCD Location unknown",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+                    }
 
-                        HorizontalDivider(modifier = Modifier.padding(vertical = 6.dp))
-
-                        Text(
-                            text = "Added: ${dateFormat.format(java.util.Date(network.dateAdded))}",
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                        Text(
-                            text = "Last connected: ${dateFormat.format(java.util.Date(network.lastConnected))}",
-                            style = MaterialTheme.typography.bodySmall
-                        )
-
-                        if (network.latitude != null && network.longitude != null) {
-                            Text(
-                                text = "📍 ${
-                                    String.format(
-                                        java.util.Locale.US,
-                                        "%.5f",
-                                        network.latitude
-                                    )
-                                }, ${
-                                    String.format(
-                                        java.util.Locale.US,
-                                        "%.5f",
-                                        network.longitude
-                                    )
-                                }",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                        } else {
-                            Text(
-                                text = "📍 Location unknown",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(top = 8.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Button(
+                            onClick = { onRemove(network) },
+                            modifier = Modifier.weight(1f),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
                         ) {
-                            Button(
-                                onClick = { onRemove(network) },
-                                modifier = Modifier.weight(1f),
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
-                            ) {
-                                Text(
-                                    "Remove from list",
-                                    style = MaterialTheme.typography.labelSmall
-                                )
-                            }
-                            Button(
-                                onClick = { confirmDelete = network },
-                                modifier = Modifier.weight(1f),
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = MaterialTheme.colorScheme.error
-                                ),
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
-                            ) {
-                                Text("Delete", style = MaterialTheme.typography.labelSmall)
-                            }
+                            Text("Remove from list", style = MaterialTheme.typography.labelSmall)
+                        }
+                        Button(
+                            onClick = { confirmDelete = network },
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.error
+                            ),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                        ) {
+                            Text("Delete", style = MaterialTheme.typography.labelSmall)
                         }
                     }
                 }

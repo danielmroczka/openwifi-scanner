@@ -1775,6 +1775,37 @@ fun SettingsDialog(
                         }
                     }
                 }
+                // ── App info (version & last install) ──
+                item {
+                    HorizontalDivider()
+                    // Use LocalContext to read package info for version and last update time
+                    val ctx = LocalContext.current
+                    val pkgInfo = try {
+                        val pm = ctx.packageManager
+                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                            pm.getPackageInfo(ctx.packageName, android.content.pm.PackageManager.PackageInfoFlags.of(0))
+                        } else {
+                            @Suppress("DEPRECATION")
+                            pm.getPackageInfo(ctx.packageName, 0)
+                        }
+                    } catch (e: Exception) {
+                        null
+                    }
+
+                    val versionName = pkgInfo?.versionName ?: "unknown"
+                    val versionCode = pkgInfo?.let {
+                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) it.longVersionCode.toString()
+                        else it.versionCode.toString()
+                    } ?: "?"
+                    val lastUpdate = pkgInfo?.lastUpdateTime ?: 0L
+                    val lastUpdateText = if (lastUpdate > 0L) java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault()).format(java.util.Date(lastUpdate)) else "unknown"
+
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("App", style = MaterialTheme.typography.titleMedium)
+                        Text("Version: $versionName (code $versionCode)", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("Last installed/updated: $lastUpdateText", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
             }
         },
         confirmButton = {

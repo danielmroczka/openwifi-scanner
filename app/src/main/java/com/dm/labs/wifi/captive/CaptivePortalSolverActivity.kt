@@ -88,7 +88,7 @@ class CaptivePortalSolverActivity : ComponentActivity() {
     }
 }
 
-@SuppressLint("SetJavaScriptEnabled")
+@SuppressLint("SetJavaScriptEnabled", "JavascriptInterface")
 @Composable
 private fun CaptivePortalSolverScreen(
     ssid: String,
@@ -206,8 +206,31 @@ private fun CaptivePortalSolverScreen(
                     settings.domStorageEnabled = true
                     settings.javaScriptCanOpenWindowsAutomatically = true
 
-                    // Add the recorder bridge
-                    addJavascriptInterface(recorder, "AndroidRecorder")
+                    // Add the recorder bridge. Wrap the recorder in a simple JavaScript interface
+                    // object so lint/static analysis can see @JavascriptInterface-annotated methods.
+                    val androidRecorderBridge = object {
+                        @android.webkit.JavascriptInterface
+                        fun onNavigation(url: String) {
+                            recorder.onNavigation(url)
+                        }
+
+                        @android.webkit.JavascriptInterface
+                        fun onClick(cssSelector: String, url: String, elementId: String, elementName: String, elementType: String) {
+                            recorder.onClick(cssSelector, url, elementId, elementName, elementType)
+                        }
+
+                        @android.webkit.JavascriptInterface
+                        fun onInput(cssSelector: String, value: String, elementId: String, elementName: String, elementType: String) {
+                            recorder.onInput(cssSelector, value, elementId, elementName, elementType)
+                        }
+
+                        @android.webkit.JavascriptInterface
+                        fun onFormSubmit(url: String, formData: String, cssSelector: String) {
+                            recorder.onFormSubmit(url, formData, cssSelector)
+                        }
+                    }
+
+                    addJavascriptInterface(androidRecorderBridge, "AndroidRecorder")
 
                     webViewClient = object : WebViewClient() {
                         override fun onPageFinished(view: WebView?, url: String?) {

@@ -1,11 +1,25 @@
 *.iml
 .gradle
-/local.properties
 /.idea/
 .DS_Store
 /build
 /captures
 .externalNativeBuild
 .cxx
-local.properties
+
+# Local properties (SDK path etc.)
+/local.properties
+
+# Node
 node_modules/
+
+# Allow sharing selected IDE settings while ignoring workspace files.
+# Ignore the whole .idea folder but keep specific shared settings directories.
+/.idea/*
+!/.idea/codeStyles/
+!/.idea/codeStyles/**
+!/.idea/inspectionProfiles/
+!/.idea/inspectionProfiles/**
+!/.idea/runConfigurations/
+!/.idea/runConfigurations/**
+

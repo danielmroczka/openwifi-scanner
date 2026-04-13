@@ -1,10 +1,9 @@
 package com.dm.labs.wifi.approval
 
-import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.withTimeoutOrNull
 
 enum class UserNetworkDecision {
@@ -21,7 +20,7 @@ object NetworkApprovalManager {
     private val _pending = MutableStateFlow<PendingNetworkApproval?>(null)
     val pending: StateFlow<PendingNetworkApproval?> = _pending.asStateFlow()
 
-    private val _decision = MutableSharedFlow<UserNetworkDecision>(extraBufferCapacity = 1)
+    private val decisionChannel = Channel<UserNetworkDecision>(capacity = Channel.BUFFERED)
 
     fun requestApproval(network: PendingNetworkApproval) {
         _pending.value = network
@@ -29,7 +28,7 @@ object NetworkApprovalManager {
 
     suspend fun awaitDecision(timeoutMs: Long = 60_000L): UserNetworkDecision {
         return withTimeoutOrNull(timeoutMs) {
-            _decision.first()
+            decisionChannel.receive()
         } ?: run {
             _pending.value = null
             UserNetworkDecision.SKIP
@@ -38,7 +37,7 @@ object NetworkApprovalManager {
 
     fun submitDecision(decision: UserNetworkDecision) {
         _pending.value = null
-        _decision.tryEmit(decision)
+        decisionChannel.trySend(decision)
     }
 
     fun clear() {

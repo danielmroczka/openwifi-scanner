@@ -15,12 +15,20 @@ class ApprovalActionReceiver : BroadcastReceiver() {
         val decisionRaw = intent.getStringExtra(EXTRA_DECISION) ?: return
         val decision = runCatching { UserNetworkDecision.valueOf(decisionRaw) }
             .getOrElse {
-                DevLog.w("Unknown approval decision from notification: $decisionRaw")
+                safeWarn("Unknown approval decision from notification: $decisionRaw")
                 return
             }
 
-        DevLog.i("Approval notification action received: $decision")
+        safeInfo("Approval notification action received: $decision")
         NetworkApprovalManager.submitDecision(decision)
+    }
+
+    private fun safeInfo(message: String) {
+        runCatching { DevLog.i(message) }
+    }
+
+    private fun safeWarn(message: String) {
+        runCatching { DevLog.w(message) }
     }
 
     companion object {

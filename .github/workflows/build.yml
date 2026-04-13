@@ -32,6 +32,9 @@ jobs:
       - name: Compile debug sources
         run: ./gradlew assembleDebug --no-daemon
 
+      - name: Compile instrumented tests
+        run: ./gradlew assembleDebugAndroidTest --no-daemon
+
       - name: Run unit tests
         run: ./gradlew testDebugUnitTest --no-daemon
 

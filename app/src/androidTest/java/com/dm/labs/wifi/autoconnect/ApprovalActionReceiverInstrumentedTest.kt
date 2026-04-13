@@ -1,23 +1,22 @@
 package com.dm.labs.wifi.autoconnect
 
 import android.content.Intent
-import android.content.ContextWrapper
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
 import com.dm.labs.wifi.approval.NetworkApprovalManager
 import com.dm.labs.wifi.approval.PendingNetworkApproval
 import com.dm.labs.wifi.approval.UserNetworkDecision
 import kotlinx.coroutines.async
-import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.yield
-import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Before
-import org.junit.Ignore
 import org.junit.Test
+import org.junit.runner.RunWith
 
-@OptIn(ExperimentalCoroutinesApi::class)
-class ApprovalActionReceiverTest {
+@RunWith(AndroidJUnit4::class)
+class ApprovalActionReceiverInstrumentedTest {
 
     private val receiver = ApprovalActionReceiver()
 
@@ -27,38 +26,38 @@ class ApprovalActionReceiverTest {
     }
 
     @Test
-    @Ignore("Requires instrumented Android runtime for Intent extras")
-    fun `notification action submits whitelist decision`() = runTest {
+    fun notificationActionSubmitsWhitelistDecision() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
         NetworkApprovalManager.requestApproval(
-            PendingNetworkApproval("Cafe", "aa:bb:cc:00:00:31", -45)
+            PendingNetworkApproval("Cafe", "aa:bb:cc:00:00:41", -45)
         )
 
-        val waitingDecision = async { NetworkApprovalManager.awaitDecision(timeoutMs = 1_000) }
-        yield()
+        val waitingDecision = async {
+            NetworkApprovalManager.awaitDecision(timeoutMs = 1_000)
+        }
 
         val intent = Intent(ApprovalActionReceiver.ACTION_APPROVAL_DECISION).apply {
             putExtra(ApprovalActionReceiver.EXTRA_DECISION, UserNetworkDecision.WHITELIST.name)
         }
-        receiver.onReceive(ContextWrapper(null), intent)
+        receiver.onReceive(context, intent)
 
-        val decision = waitingDecision.await()
-        assertEquals(UserNetworkDecision.WHITELIST, decision)
+        assertEquals(UserNetworkDecision.WHITELIST, waitingDecision.await())
         assertNull(NetworkApprovalManager.pending.value)
     }
 
     @Test
-    fun `invalid action is ignored`() {
+    fun invalidActionIsIgnored() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
         NetworkApprovalManager.requestApproval(
-            PendingNetworkApproval("Cafe", "aa:bb:cc:00:00:32", -50)
+            PendingNetworkApproval("Cafe", "aa:bb:cc:00:00:42", -50)
         )
 
         val intent = Intent("com.dm.labs.wifi.IGNORED").apply {
             putExtra(ApprovalActionReceiver.EXTRA_DECISION, UserNetworkDecision.BLACKLIST.name)
         }
-        receiver.onReceive(ContextWrapper(null), intent)
+        receiver.onReceive(context, intent)
 
         assertNotNull(NetworkApprovalManager.pending.value)
     }
 }
-
 

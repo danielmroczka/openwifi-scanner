@@ -297,7 +297,13 @@ class MainActivity : ComponentActivity() {
                                 onConnect = vm::connectToNetwork,
                                 onToggleBlacklist = vm::toggleBlacklist,
                                 onToggleWhitelist = vm::toggleWhitelist,
-                                onStartAutoConnect = { AutoConnectService.start(this@MainActivity) },
+                                onStartAutoConnect = {
+                                    if (hasPermissions) {
+                                        AutoConnectService.start(this@MainActivity)
+                                    } else {
+                                        Toast.makeText(this@MainActivity, "Please grant all permissions first", Toast.LENGTH_SHORT).show()
+                                    }
+                                },
                                 onStopAutoConnect = { AutoConnectService.stop(this@MainActivity) },
                                 onResolvePortal = { CaptivePortalSolverActivity.launch(this@MainActivity) },
                                 modifier = Modifier.weight(1f)
@@ -388,9 +394,13 @@ class MainActivity : ComponentActivity() {
             Manifest.permission.CHANGE_WIFI_STATE
         )
 
+        // POST_NOTIFICATIONS is required starting from Android 12 (API 31) for foreground services
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            permissions.add(Manifest.permission.POST_NOTIFICATIONS)
+        }
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             permissions.add(Manifest.permission.NEARBY_WIFI_DEVICES)
-            permissions.add(Manifest.permission.POST_NOTIFICATIONS)
         }
         return permissions.toTypedArray()
     }
@@ -450,7 +460,10 @@ fun WifiScreen(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Button(onClick = onStartAutoConnect, enabled = !state.autoConnectRunning) {
+            Button(
+                onClick = onStartAutoConnect,
+                enabled = !state.autoConnectRunning && hasPermissions
+            ) {
                 Text("Auto-Connect")
             }
             Button(onClick = onStopAutoConnect, enabled = state.autoConnectRunning) {
@@ -464,6 +477,15 @@ fun WifiScreen(
                     strokeWidth = 2.dp
                 )
             }
+        }
+
+        if (!hasPermissions) {
+            Text(
+                "⚠️ All permissions required for background auto-connect",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(top = 4.dp)
+            )
         }
 
         state.autoConnectMessage?.let {

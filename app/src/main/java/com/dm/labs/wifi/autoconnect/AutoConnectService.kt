@@ -10,6 +10,7 @@ import android.content.Intent
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import com.dm.labs.wifi.R
 import com.dm.labs.wifi.approval.NetworkApprovalManager
 import com.dm.labs.wifi.approval.PendingNetworkApproval
@@ -75,6 +76,7 @@ class AutoConnectService : Service() {
 
         ScanLogManager.log("Auto-connect scanner started.")
         DevLog.i("AutoConnectService created.")
+        DevLog.i("Notification permission granted: ${hasNotificationPermission()}")
 
         AutoConnectRuntime.update(
             BackgroundAutoConnectState(
@@ -117,7 +119,12 @@ class AutoConnectService : Service() {
         if (autoJob?.isActive == true) return
 
         shouldRun = true
-        startForeground(NOTIFICATION_ID, buildNotification("Auto-connect started"))
+        try {
+            startForeground(NOTIFICATION_ID, buildNotification("Auto-connect started"))
+        } catch (e: Exception) {
+            DevLog.w("Failed to start foreground service: ${e.message}")
+            ScanLogManager.log("Warning: Could not display notification. Grant 'Display over other apps' permission.")
+        }
 
         autoJob = serviceScope.launch {
             var attempts = AutoConnectRuntime.state.value.attempts
@@ -267,12 +274,34 @@ class AutoConnectService : Service() {
     }
 
     private fun buildNotification(content: String): Notification {
+        val intent = Intent(this, com.dm.labs.wifi.ui.MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            this,
+            0,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentTitle(getString(R.string.auto_connect_notification_title))
             .setContentText(content)
             .setOngoing(true)
+            .setContentIntent(pendingIntent)
+            .setAutoCancel(false)
             .build()
+    }
+
+    private fun hasNotificationPermission(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            return true
+        }
+        return ContextCompat.checkSelfPermission(
+            this,
+            android.Manifest.permission.POST_NOTIFICATIONS
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
     }
 
     companion object {

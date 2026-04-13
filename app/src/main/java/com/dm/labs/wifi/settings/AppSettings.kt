@@ -14,7 +14,8 @@ data class AppSettingsState(
     val scanIntervalMs: Long get() = scanIntervalSeconds * 1_000L
 
     companion object {
-        const val DEFAULT_SCAN_INTERVAL_SECONDS = 5
+        // Increase default scan interval to reduce battery impact from frequent Wi‑Fi scans
+        const val DEFAULT_SCAN_INTERVAL_SECONDS = 30
     }
 }
 

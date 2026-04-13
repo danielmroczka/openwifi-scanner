@@ -239,7 +239,7 @@ private fun CaptivePortalSolverScreen(
                             view?.let { wv ->
                                 if (isReplayMode && replaySteps.isNotEmpty()) {
                                     // Replay mode: inject replay script
-                                    status = "Replaying ${replaySteps.size} steps…"
+                                    "Replaying ${replaySteps.size} steps…"
                                     val replayJs = CaptivePortalRecorder.getReplayJs(replaySteps)
                                     wv.evaluateJavascript(replayJs, null)
                                 } else {

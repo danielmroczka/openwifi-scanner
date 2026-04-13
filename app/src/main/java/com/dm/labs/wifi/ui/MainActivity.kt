@@ -77,6 +77,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.content.PermissionChecker
 import androidx.core.net.toUri
 import android.widget.Toast
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -131,7 +132,7 @@ class MainActivity : ComponentActivity() {
                 val state by vm.uiState.collectAsState()
                 val logs by ScanLogManager.logs.collectAsState()
                 var hasPermissions by remember { mutableStateOf(hasRequiredPermissions()) }
-                var selectedTabIndex by remember { mutableStateOf(0) }
+                var selectedTabIndex by remember { mutableIntStateOf(0) }
                 var showSettingsDialog by remember { mutableStateOf(false) }
 
                 // --- Solutions import/export state ---
@@ -178,7 +179,9 @@ class MainActivity : ComponentActivity() {
 
                 LaunchedEffect(hasPermissions) {
                     if (hasPermissions) {
-                        AutoConnectService.start(this@MainActivity)
+                        // Do NOT auto-start the background AutoConnectService when permissions are granted.
+                        // Starting a long-running foreground service automatically can drain battery and surprise users.
+                        // The user may explicitly start AutoConnect via the UI button; keep the periodic in-UI scan only.
                         vm.startPeriodicScan()
                     } else {
                         vm.stopPeriodicScan()

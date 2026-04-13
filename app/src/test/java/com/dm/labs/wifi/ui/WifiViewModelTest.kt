@@ -24,6 +24,10 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import org.junit.Assert.assertNull
+import com.dm.labs.wifi.approval.NetworkApprovalManager
+import com.dm.labs.wifi.approval.PendingNetworkApproval
+import com.dm.labs.wifi.approval.UserNetworkDecision
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class WifiViewModelTest {
@@ -316,6 +320,46 @@ class WifiViewModelTest {
     private class FakePortalChecker(private val status: CaptivePortalStatus) :
         CaptivePortalChecker {
         override fun getStatus(): CaptivePortalStatus = status
+    }
+
+    @Test
+    fun `scan finds open network, connects, captive portal checkbox whitelists`() = runTest {
+        val scanner = FakeScanner(
+            Result.success(
+                listOf(
+                    WifiNetwork("CafeNet", "aa:bb:cc:01", "[ESS]", -50)
+                )
+            )
+        )
+
+        val vm = createVm(
+            scanner = scanner,
+            connector = FakeConnector(ConnectAttemptResult.Connected),
+            checker = FakePortalChecker(CaptivePortalStatus.CAPTIVE_PORTAL)
+        )
+
+        // perform a scan
+        vm.scanOpenNetworks()
+        val afterScan = vm.uiState.value
+        assertEquals(1, afterScan.networks.size)
+
+        // connect to the found network
+        vm.connectToNetwork("CafeNet")
+
+        var state = vm.uiState.value
+        assertEquals("CafeNet", state.connectedSsid)
+        assertTrue(state.needsPortalLogin)
+
+        // Simulate that the app requests user approval for this network (captive portal UI)
+        NetworkApprovalManager.requestApproval(PendingNetworkApproval("CafeNet", "aa:bb:cc:01", -50))
+
+        // Simulate user checking the "remember/whitelist" checkbox and confirming
+        vm.handleApprovalDecision(UserNetworkDecision.WHITELIST)
+
+        // After decision, pending should be cleared
+        assertNull(NetworkApprovalManager.pending.value)
+        state = vm.uiState.value
+        assertNull(state.pendingApproval)
     }
 }
 

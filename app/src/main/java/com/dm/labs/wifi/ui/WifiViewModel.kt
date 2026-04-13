@@ -38,6 +38,8 @@ data class WifiUiState(
     val isScanning: Boolean = false,
     val isConnecting: Boolean = false,
     val networks: List<WifiNetwork> = emptyList(),
+    // Map of SSID -> list of BSSIDs seen for that SSID (helps group multiple routers/APs)
+    val bssidGroups: Map<String, List<String>> = emptyMap(),
     val connectedSsid: String? = null,
     val needsPortalLogin: Boolean = false,
     val statusMessage: String? = null,
@@ -116,29 +118,72 @@ class WifiViewModel(
         _uiState.update {
             it.copy(isScanning = true, statusMessage = null)
         }
+        try {
+            val result = scanner.scanOpenNetworks()
+            result
+                .onSuccess { networks ->
+                // Group networks by SSID to avoid showing multiple entries for the same network name
+                val groupedBySsid: Map<String, List<WifiNetwork>> = networks.groupBy { it.ssid }
+                // Choose the strongest AP (highest level) to represent the SSID in the list
+                val groupedNetworks: List<WifiNetwork> = groupedBySsid.mapNotNull { (_, list) ->
+                    list.maxByOrNull { it.level }
+                }
+                val bssidGroups: Map<String, List<String>> = groupedBySsid.mapValues { entry ->
+                    entry.value.map { it.bssid }
+                }
 
-        val result = scanner.scanOpenNetworks()
-        result
-            .onSuccess { networks ->
                 _uiState.update {
                     it.copy(
                         isScanning = false,
-                        networks = networks,
-                        statusMessage = if (networks.isEmpty()) "No open networks found." else null,
+                        networks = groupedNetworks,
+                        bssidGroups = bssidGroups,
+                        statusMessage = if (groupedNetworks.isEmpty()) "No open networks found." else null,
                         lastScanTimestamp = System.currentTimeMillis()
                     )
                 }
-                ScanLogManager.log("Scanned ${networks.size} open networks.")
-            }
-            .onFailure { error ->
-                _uiState.update {
-                    it.copy(
-                        isScanning = false,
-                        statusMessage = error.message ?: "Scan failed."
-                    )
+
+                ScanLogManager.log("Scanned ${networks.size} open networks (grouped to ${groupedNetworks.size} SSIDs).")
+
+                // If we have a repository and some whitelisted networks, attempt to auto-connect
+                // to the first matching whitelisted BSSID we see. This helps when a network was
+                // previously marked as favourite/whitelisted but no connection happened automatically.
+                val repo = repository
+                // Only attempt automatic connection to whitelisted networks if app settings allow
+                // this behaviour (guard against unexpected background connect attempts).
+                if (repo != null && appSettings?.state?.value?.autoStartOnBoot == true) {
+                    try {
+                        val whitelisted = repo.getWhitelistedNetworks().map { it.bssid }.toSet()
+                        val detectedBssids = networks.map { it.bssid }.toSet()
+                        val matching = detectedBssids.intersect(whitelisted)
+                        if (matching.isNotEmpty()) {
+                            val matchedBssid = matching.first()
+                            val matchedSsid = networks.find { it.bssid == matchedBssid }?.ssid
+                            if (matchedSsid != null && _uiState.value.connectedSsid != matchedSsid) {
+                                _uiState.update { it.copy(statusMessage = "Found favourite network $matchedSsid — attempting to connect...") }
+                                // Use existing connect flow which will update isConnecting/status appropriately
+                                connectToNetwork(matchedSsid)
+                            }
+                        }
+                    } catch (e: Exception) {
+                        ScanLogManager.log("Error while checking whitelisted networks: ${e.message}")
+                    }
                 }
-                ScanLogManager.log("Scan failed: ${error.message}")
             }
+                .onFailure { error ->
+                    _uiState.update {
+                        it.copy(
+                            isScanning = false,
+                            statusMessage = error.message ?: "Scan failed."
+                        )
+                    }
+                    ScanLogManager.log("Scan failed: ${error.message}")
+                }
+        } catch (e: Exception) {
+            _uiState.update {
+                it.copy(isScanning = false, statusMessage = e.message ?: "Scan failed.")
+            }
+            ScanLogManager.log("Scan failed: ${e.message}")
+        }
     }
 
     fun connectToNetwork(ssid: String) {

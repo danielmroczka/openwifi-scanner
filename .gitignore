@@ -1,6 +1,6 @@
 *.iml
 .gradle
-/.idea/
+.idea
 .DS_Store
 /build
 /captures
@@ -22,4 +22,3 @@ node_modules/
 !/.idea/inspectionProfiles/**
 !/.idea/runConfigurations/
 !/.idea/runConfigurations/**
-

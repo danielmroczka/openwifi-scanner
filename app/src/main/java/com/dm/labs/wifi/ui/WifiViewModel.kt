@@ -52,7 +52,8 @@ data class WifiUiState(
     val whitelistedNetworks: List<WifiNetworkEntity> = emptyList(),
     val pendingApproval: PendingNetworkApproval? = null,
     val solutions: List<CaptivePortalSolutionEntity> = emptyList(),
-    val selectedSolutionDetail: SolutionWithSteps? = null
+    val selectedSolutionDetail: SolutionWithSteps? = null,
+    val selectedNetworkDetail: Pair<WifiNetworkEntity, List<CaptivePortalSolutionEntity>>? = null
 )
 
 class WifiViewModel(
@@ -329,6 +330,17 @@ class WifiViewModel(
     fun closeSolutionDetail() {
         _uiState.update { it.copy(selectedSolutionDetail = null) }
         refreshSolutions()
+    }
+
+    fun loadNetworkDetail(network: WifiNetworkEntity) {
+        viewModelScope.launch {
+            val solutions = solutionRepository?.getSolutionsForSsid(network.ssid) ?: emptyList()
+            _uiState.update { it.copy(selectedNetworkDetail = network to solutions) }
+        }
+    }
+
+    fun closeNetworkDetail() {
+        _uiState.update { it.copy(selectedNetworkDetail = null) }
     }
 
     fun updateSolutionInfo(solutionId: Long, ssid: String, description: String, portalUrl: String) {

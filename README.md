@@ -20,6 +20,10 @@ Android app that scans nearby **open Wi-Fi** networks, auto-connects, detects ca
 - Foreground service for background auto-connect
 - `WifiNetworkSuggestion` (silent) with `WifiNetworkSpecifier` fallback (Android 10+)
 
+## Build requirements
+
+- JDK 21 (project is configured for Java/Kotlin toolchain 21)
+
 ## Permissions
 
 `ACCESS_FINE_LOCATION`, `ACCESS_WIFI_STATE`, `CHANGE_WIFI_STATE`, `NEARBY_WIFI_DEVICES` (API 33+), `POST_NOTIFICATIONS` (API 33+), `FOREGROUND_SERVICE`

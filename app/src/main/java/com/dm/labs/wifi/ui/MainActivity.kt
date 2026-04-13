@@ -231,6 +231,11 @@ class MainActivity : ComponentActivity() {
                 if (showSettingsDialog) {
                     SettingsDialog(
                         appSettings = appSettings,
+                        onExitApp = {
+                            vm.stopPeriodicScan()
+                            AutoConnectService.stop(this@MainActivity)
+                            finishAndRemoveTask()
+                        },
                         onDismiss = { showSettingsDialog = false }
                     )
                 }
@@ -301,9 +306,16 @@ class MainActivity : ComponentActivity() {
                             1 -> NetworksScreen(
                                 whitelistedNetworks = state.whitelistedNetworks,
                                 blacklistedNetworks = state.blacklistedNetworks,
-                                onRemoveWhitelisted = { vm.toggleWhitelist(it.bssid, it.ssid) },
-                                onRemoveBlacklisted = { vm.toggleBlacklist(it.bssid, it.ssid) },
-                                onDelete = vm::removeNetwork,
+                                onRemoveWhitelisted = { vm.removeNetwork(it.bssid) },
+                                onRemoveBlacklisted = { vm.removeNetwork(it.bssid) },
+                                selectedDetail = state.selectedNetworkDetail,
+                                onOpenDetail = vm::loadNetworkDetail,
+                                onCloseDetail = vm::closeNetworkDetail,
+                                onReplaySolution = { sol ->
+                                    CaptivePortalSolverActivity.launchReplay(
+                                        this@MainActivity, sol.ssid, sol.id
+                                    )
+                                },
                                 modifier = Modifier.weight(1f)
                             )
 
@@ -616,10 +628,29 @@ fun NetworksScreen(
     blacklistedNetworks: List<WifiNetworkEntity>,
     onRemoveWhitelisted: (WifiNetworkEntity) -> Unit,
     onRemoveBlacklisted: (WifiNetworkEntity) -> Unit,
-    onDelete: (String) -> Unit,
+    selectedDetail: Pair<WifiNetworkEntity, List<CaptivePortalSolutionEntity>>?,
+    onOpenDetail: (WifiNetworkEntity) -> Unit,
+    onCloseDetail: () -> Unit,
+    onReplaySolution: (CaptivePortalSolutionEntity) -> Unit,
     modifier: Modifier = Modifier
 ) {
     var showWhitelist by remember { mutableStateOf(true) }
+
+    if (selectedDetail != null) {
+        NetworkDetailScreen(
+            network = selectedDetail.first,
+            solutions = selectedDetail.second,
+            onBack = onCloseDetail,
+            onForget = {
+                if (showWhitelist) onRemoveWhitelisted(selectedDetail.first)
+                else onRemoveBlacklisted(selectedDetail.first)
+                onCloseDetail()
+            },
+            onReplaySolution = onReplaySolution,
+            modifier = modifier
+        )
+        return
+    }
 
     Column(
         modifier = modifier
@@ -650,7 +681,7 @@ fun NetworksScreen(
                 emptyMessage = "No favourite networks yet.\nFavourite a network from the Scanner tab.",
                 networks = whitelistedNetworks,
                 onRemove = onRemoveWhitelisted,
-                onDelete = onDelete,
+                onTap = onOpenDetail,
                 modifier = Modifier.weight(1f)
             )
         } else {
@@ -658,7 +689,7 @@ fun NetworksScreen(
                 emptyMessage = "No blocked networks yet.\nBlock a network from the Scanner tab.",
                 networks = blacklistedNetworks,
                 onRemove = onRemoveBlacklisted,
-                onDelete = onDelete,
+                onTap = onOpenDetail,
                 modifier = Modifier.weight(1f)
             )
         }
@@ -670,29 +701,29 @@ private fun NetworkListContent(
     emptyMessage: String,
     networks: List<WifiNetworkEntity>,
     onRemove: (WifiNetworkEntity) -> Unit,
-    onDelete: (String) -> Unit,
+    onTap: (WifiNetworkEntity) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    var confirmDelete by remember { mutableStateOf<WifiNetworkEntity?>(null) }
+    var confirmForget by remember { mutableStateOf<WifiNetworkEntity?>(null) }
     val dateFormat = remember {
         java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault())
     }
 
-    confirmDelete?.let { network ->
+    confirmForget?.let { network ->
         AlertDialog(
-            onDismissRequest = { confirmDelete = null },
-            title = { Text("Delete Network") },
-            text = { Text("Remove ${network.ssid} (${network.bssid}) permanently?") },
+            onDismissRequest = { confirmForget = null },
+            title = { Text("Forget Network") },
+            text = { Text("Remove ${network.ssid} completely? It will no longer appear in any list.") },
             confirmButton = {
                 TextButton(onClick = {
-                    onDelete(network.bssid)
-                    confirmDelete = null
+                    onRemove(network)
+                    confirmForget = null
                 }) {
-                    Text("Delete", color = MaterialTheme.colorScheme.error)
+                    Text("Forget", color = MaterialTheme.colorScheme.error)
                 }
             },
             dismissButton = {
-                TextButton(onClick = { confirmDelete = null }) { Text("Cancel") }
+                TextButton(onClick = { confirmForget = null }) { Text("Cancel") }
             }
         )
     }
@@ -712,74 +743,234 @@ private fun NetworkListContent(
     ) {
         items(networks, key = { it.bssid }) { network ->
             Card(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onTap(network) },
                 colors = CardDefaults.cardColors(
                     containerColor = MaterialTheme.colorScheme.surfaceVariant
                 )
             ) {
                 Column(modifier = Modifier.padding(12.dp)) {
-                    Text(
-                        text = network.ssid,
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold
-                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = network.ssid,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Text(
+                            text = "→",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
                     Text(
                         text = "BSSID: ${network.bssid}",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-
-                    HorizontalDivider(modifier = Modifier.padding(vertical = 6.dp))
-
                     Text(
-                        text = "Added: ${dateFormat.format(java.util.Date(network.dateAdded))}",
-                        style = MaterialTheme.typography.bodySmall
+                        text = dateFormat.format(java.util.Date(network.lastConnected)),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    Text(
-                        text = "Last connected: ${dateFormat.format(java.util.Date(network.lastConnected))}",
-                        style = MaterialTheme.typography.bodySmall
-                    )
+                }
+            }
+        }
+    }
+}
 
-                    if (network.latitude != null && network.longitude != null) {
+@Composable
+private fun NetworkDetailScreen(
+    network: WifiNetworkEntity,
+    solutions: List<CaptivePortalSolutionEntity>,
+    onBack: () -> Unit,
+    onForget: () -> Unit,
+    onReplaySolution: (CaptivePortalSolutionEntity) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val dateFormat = remember {
+        java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault())
+    }
+    var confirmForget by remember { mutableStateOf(false) }
+
+    if (confirmForget) {
+        AlertDialog(
+            onDismissRequest = { confirmForget = false },
+            title = { Text("Forget Network") },
+            text = { Text("Remove ${network.ssid} completely? It will no longer appear in any list.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmForget = false
+                    onForget()
+                }) { Text("Forget", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmForget = false }) { Text("Cancel") }
+            }
+        )
+    }
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        // ── Header ──
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            TextButton(onClick = onBack) { Text("← Back") }
+            Text(
+                text = "Network Details",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(start = 8.dp)
+            )
+        }
+
+        // ── Network info card ──
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 8.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.primaryContainer
+            )
+        ) {
+            Column(modifier = Modifier.padding(12.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = network.ssid,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.weight(1f)
+                    )
+                    val statusLabel = when {
+                        network.isWhitelisted -> "★ Favourite"
+                        network.isBlacklisted -> "✖ Blocked"
+                        else -> ""
+                    }
+                    if (statusLabel.isNotEmpty()) {
                         Text(
-                            text = "\uD83D\uDCCD ${
-                                String.format(java.util.Locale.US, "%.5f", network.latitude)
-                            }, ${
-                                String.format(java.util.Locale.US, "%.5f", network.longitude)
-                            }",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    } else {
-                        Text(
-                            text = "\uD83D\uDCCD Location unknown",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            text = statusLabel,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (network.isWhitelisted) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.error
                         )
                     }
+                }
 
+                HorizontalDivider(modifier = Modifier.padding(vertical = 6.dp))
+
+                Text(
+                    text = "BSSID: ${network.bssid}",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Text(
+                    text = "Added: ${dateFormat.format(java.util.Date(network.dateAdded))}",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Text(
+                    text = "Last connected: ${dateFormat.format(java.util.Date(network.lastConnected))}",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                if (network.latitude != null && network.longitude != null) {
+                    Text(
+                        text = "📍 ${String.format(java.util.Locale.US, "%.5f", network.latitude)}, " +
+                               String.format(java.util.Locale.US, "%.5f", network.longitude),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                } else {
+                    Text(
+                        text = "📍 Location unknown",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+                Button(
+                    onClick = { confirmForget = true },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error
+                    ),
+                    modifier = Modifier.fillMaxWidth(),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                ) {
+                    Text("Forget network", style = MaterialTheme.typography.labelSmall)
+                }
+            }
+        }
+
+        // ── Portal solutions ──
+        Text(
+            text = "Portal Solutions (${solutions.size})",
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(top = 4.dp, bottom = 4.dp)
+        )
+
+        if (solutions.isEmpty()) {
+            Text(
+                text = "No saved portal solutions for this network.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
+        LazyColumn(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            items(solutions, key = { it.id }) { sol ->
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant
+                    )
+                ) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(top = 8.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            .padding(10.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Button(
-                            onClick = { onRemove(network) },
-                            modifier = Modifier.weight(1f),
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
-                        ) {
-                            Text("Remove from list", style = MaterialTheme.typography.labelSmall)
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Solution #${sol.id}",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                text = "${sol.stepCount} steps",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            if (sol.description.isNotEmpty()) {
+                                Text(
+                                    text = sol.description,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
                         }
                         Button(
-                            onClick = { confirmDelete = network },
-                            modifier = Modifier.weight(1f),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.error
-                            ),
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                            onClick = { onReplaySolution(sol) },
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
                         ) {
-                            Text("Delete", style = MaterialTheme.typography.labelSmall)
+                            Text("▶ Replay", style = MaterialTheme.typography.labelSmall)
                         }
                     }
                 }
@@ -1661,11 +1852,32 @@ fun LogsScreen(
 @Composable
 fun SettingsDialog(
     appSettings: AppSettings,
+    onExitApp: () -> Unit,
     onDismiss: () -> Unit
 ) {
     val settingsState by appSettings.state.collectAsState()
     var textValue by remember(settingsState.scanIntervalSeconds) {
         mutableStateOf(settingsState.scanIntervalSeconds.toString())
+    }
+    var showExitConfirm by remember { mutableStateOf(false) }
+
+    if (showExitConfirm) {
+        AlertDialog(
+            onDismissRequest = { showExitConfirm = false },
+            title = { Text("Close app") },
+            text = { Text("This will stop background auto-connect service and close the app.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showExitConfirm = false
+                    onExitApp()
+                }) {
+                    Text("Close")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showExitConfirm = false }) { Text("Cancel") }
+            }
+        )
     }
 
     fun applyValue(newVal: Int) {
@@ -1807,6 +2019,24 @@ fun SettingsDialog(
                         Text("App", style = MaterialTheme.typography.titleMedium)
                         Text("Version: $versionName (code $versionCode)", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Text("Last installed/updated: $lastUpdateText", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+
+                item {
+                    HorizontalDivider()
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Application", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "Stop the background service and close the app.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Button(
+                            onClick = { showExitConfirm = true },
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                        ) {
+                            Text("Stop Service & Close App")
+                        }
                     }
                 }
             }

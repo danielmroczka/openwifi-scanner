@@ -2,7 +2,10 @@ package com.dm.labs.wifi.platform
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
@@ -27,8 +30,9 @@ import kotlin.coroutines.resume
 
 @Suppress("DEPRECATION")
 class AndroidWifiScanner(context: Context) : WifiScanner {
+    private val appContext = context.applicationContext
     private val wifiManager: WifiManager =
-        context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+        appContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
 
     @SuppressLint("MissingPermission")
     @RequiresPermission(anyOf = [Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.NEARBY_WIFI_DEVICES])
@@ -37,7 +41,11 @@ class AndroidWifiScanner(context: Context) : WifiScanner {
             return Result.failure(IllegalStateException("Wi-Fi is turned off."))
         }
 
-        wifiManager.startScan()
+        val freshResultsAvailable = awaitFreshScanResults()
+        if (!freshResultsAvailable) {
+            ScanLogManager.log("Wi-Fi scan did not deliver fresh results in time. Using last known scan results.")
+        }
+
         val networks = wifiManager.scanResults
             .asSequence()
             .filter { it.SSID.isNotBlank() }
@@ -57,6 +65,52 @@ class AndroidWifiScanner(context: Context) : WifiScanner {
         return Result.success(networks)
     }
 
+    private suspend fun awaitFreshScanResults(): Boolean {
+        return withTimeoutOrNull(SCAN_RESULTS_TIMEOUT_MS) {
+            suspendCancellableCoroutine { continuation ->
+                var receiverRegistered = false
+                lateinit var receiver: BroadcastReceiver
+
+                fun unregisterReceiverSafe() {
+                    if (!receiverRegistered) return
+                    receiverRegistered = false
+                    runCatching { appContext.unregisterReceiver(receiver) }
+                }
+
+                receiver = object : BroadcastReceiver() {
+                    override fun onReceive(context: Context?, intent: Intent?) {
+                        unregisterReceiverSafe()
+                        if (continuation.isActive) {
+                            continuation.resume(true)
+                        }
+                    }
+                }
+
+                val filter = IntentFilter(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    appContext.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+                } else {
+                    @Suppress("DEPRECATION")
+                    appContext.registerReceiver(receiver, filter)
+                }
+                receiverRegistered = true
+
+                val scanStarted = runCatching { wifiManager.startScan() }.getOrDefault(false)
+                if (!scanStarted) {
+                    unregisterReceiverSafe()
+                    if (continuation.isActive) {
+                        continuation.resume(false)
+                    }
+                    return@suspendCancellableCoroutine
+                }
+
+                continuation.invokeOnCancellation {
+                    unregisterReceiverSafe()
+                }
+            }
+        } ?: false
+    }
+
     private fun ScanResult.isOpenNetwork(): Boolean {
         val caps = capabilities.uppercase()
         return !caps.contains("WEP") &&
@@ -64,6 +118,10 @@ class AndroidWifiScanner(context: Context) : WifiScanner {
                 !caps.contains("SAE") &&
                 !caps.contains("EAP") &&
                 !caps.contains("OWE")
+    }
+
+    private companion object {
+        private const val SCAN_RESULTS_TIMEOUT_MS = 10_000L
     }
 }
 
@@ -105,7 +163,7 @@ class AndroidWifiConnector(context: Context) : WifiConnector {
             ScanLogManager.log("Suggestion added for $ssid, waiting for system to connect...")
 
             // Wait for the system to pick up the suggestion and connect
-            val connected = waitForConnection()
+            val connected = waitForConnection(ssid)
             if (connected) {
                 return ConnectAttemptResult.Connected
             }
@@ -120,19 +178,45 @@ class AndroidWifiConnector(context: Context) : WifiConnector {
         return connectViaSpecifier(ssid)
     }
 
-    private suspend fun waitForConnection(): Boolean {
+    private suspend fun waitForConnection(expectedSsid: String): Boolean {
         // Give the system time to auto-connect via the suggestion
         repeat(10) {
-            delay(2_000)
-            val activeNetwork = connectivityManager.activeNetwork ?: return@repeat
-            val caps = connectivityManager.getNetworkCapabilities(activeNetwork) ?: return@repeat
-            if (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
-                connectivityManager.bindProcessToNetwork(activeNetwork)
+            if (isConnectedToExpectedWifi(expectedSsid)) {
                 return true
             }
+            delay(2_000)
         }
+
+        return isConnectedToExpectedWifi(expectedSsid)
+    }
+
+    private fun isConnectedToExpectedWifi(expectedSsid: String): Boolean {
+        val activeNetwork = connectivityManager.activeNetwork ?: return false
+        val caps = connectivityManager.getNetworkCapabilities(activeNetwork) ?: return false
+        if (!caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
+            return false
+        }
+
+        val currentSsid = currentWifiSsid() ?: return false
+        if (currentSsid == expectedSsid) {
+            connectivityManager.bindProcessToNetwork(activeNetwork)
+            return true
+        }
+
         return false
     }
+
+    @Suppress("DEPRECATION")
+    private fun currentWifiSsid(): String? {
+        val rawSsid = wifiManager.connectionInfo?.ssid ?: return null
+        return normalizeSsid(rawSsid)
+    }
+
+    private fun normalizeSsid(rawSsid: String): String? {
+        val normalized = rawSsid.removePrefix("\"").removeSuffix("\"")
+        return normalized.takeIf { it.isNotBlank() && !it.equals("<unknown ssid>", ignoreCase = true) }
+    }
+
 
     private suspend fun connectViaSpecifier(ssid: String): ConnectAttemptResult {
         val specifier = WifiNetworkSpecifier.Builder()

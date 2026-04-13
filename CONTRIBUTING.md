@@ -4,6 +4,8 @@ This document has quick, copy-paste steps for building, testing and debugging Op
 on a machine with a bash shell (Linux, macOS, or WSL). It also includes tips for running the background
 AutoConnectService and where to find logs and test doubles.
 
+Prerequisite: JDK 21 (the project uses Java/Kotlin toolchain 21).
+
 Build
 
 ```bash

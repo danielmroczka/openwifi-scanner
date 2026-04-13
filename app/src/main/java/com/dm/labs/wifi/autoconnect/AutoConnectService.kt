@@ -45,6 +45,7 @@ class AutoConnectService : Service() {
     private lateinit var checker: CaptivePortalChecker
     private lateinit var coordinator: AutoConnectCoordinator
     private lateinit var portalSolver: CaptivePortalAutoSolver
+    private lateinit var captivePortalRecoveryHandler: CaptivePortalRecoveryHandler
     private lateinit var appSettings: AppSettings
     private val approvalNotificationId = NOTIFICATION_ID + 1
 
@@ -62,6 +63,14 @@ class AutoConnectService : Service() {
 
         coordinator = AutoConnectCoordinator(scanner, connector, checker, repository)
         portalSolver = CaptivePortalAutoSolver.create(applicationContext, checker, solutionRepository)
+        captivePortalRecoveryHandler = CaptivePortalRecoveryHandler(
+            portalSolver = { ssid -> portalSolver.trySolve(ssid) },
+            disconnectCurrentNetwork = { connector.disconnectCurrentNetwork() },
+            putOnCooldown = { ssid -> NetworkCooldownManager.putOnCooldown(ssid) },
+            scanLog = { message -> ScanLogManager.log(message) },
+            devInfo = { message -> DevLog.i(message) },
+            devWarn = { message -> DevLog.w(message) }
+        )
         appSettings = AppSettings.getInstance(applicationContext)
 
         ScanLogManager.log("Auto-connect scanner started.")
@@ -139,34 +148,12 @@ class AutoConnectService : Service() {
                         }
 
                         state.captivePortalDetected -> {
-                            pushState(state.copy(message = "Solving captive portal on ${state.currentSsid}…"))
-                            DevLog.i("Attempting captive portal solve on ${state.currentSsid}…")
-                            val solved = portalSolver.trySolve(state.currentSsid)
-                            if (solved) {
-                                connected = true
-                                ScanLogManager.log("Captive portal solved on ${state.currentSsid}.")
-                                DevLog.i("Captive portal solved successfully on ${state.currentSsid}")
-                                pushState(
-                                    state.copy(
-                                        captivePortalDetected = false,
-                                        hasValidatedInternet = true,
-                                        message = "Connected to ${state.currentSsid} with internet."
-                                    )
-                                )
-                            } else {
-                                connector.disconnectCurrentNetwork()
-                                val ssid = state.currentSsid ?: "unknown"
-                                NetworkCooldownManager.putOnCooldown(ssid)
-                                ScanLogManager.log("Captive portal solve failed on $ssid — network on 1h cooldown.")
-                                DevLog.w("Captive portal solve failed on $ssid. Disconnected, put on cooldown.")
-                                pushState(
-                                    BackgroundAutoConnectState(
-                                        isRunning = true,
-                                        attempts = attempts,
-                                        message = "Portal solve failed on $ssid. Retrying…"
-                                    )
-                                )
-                            }
+                            val recoveryState = captivePortalRecoveryHandler.recover(
+                                state = state,
+                                attempts = attempts,
+                                pushState = { pushState(it) }
+                            )
+                            connected = recoveryState.hasValidatedInternet
                         }
 
                         else -> delay(appSettings.state.value.scanIntervalMs)

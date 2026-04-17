@@ -50,12 +50,14 @@ class CaptivePortalSolverActivity : ComponentActivity() {
 
         val ssid = intent.getStringExtra(EXTRA_SSID) ?: "Unknown"
         val replaySolutionId = intent.getLongExtra(EXTRA_REPLAY_SOLUTION_ID, -1L)
+        val autoRecord = intent.getBooleanExtra(EXTRA_AUTO_RECORD, false)
 
         setContent {
             WIFITheme {
                 CaptivePortalSolverScreen(
                     ssid = ssid,
                     replaySolutionId = replaySolutionId,
+                    autoRecord = autoRecord,
                     onClose = { finish() }
                 )
             }
@@ -66,12 +68,14 @@ class CaptivePortalSolverActivity : ComponentActivity() {
         const val PORTAL_CHECK_URL = "http://connectivitycheck.gstatic.com/generate_204"
         const val EXTRA_SSID = "extra_ssid"
         const val EXTRA_REPLAY_SOLUTION_ID = "extra_replay_solution_id"
+        const val EXTRA_AUTO_RECORD = "extra_auto_record"
 
-        fun launch(context: Context, ssid: String = "Unknown") {
+        fun launch(context: Context, ssid: String = "Unknown", autoRecord: Boolean = false) {
             context.startActivity(
                 Intent(context, CaptivePortalSolverActivity::class.java).apply {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
                     putExtra(EXTRA_SSID, ssid)
+                    putExtra(EXTRA_AUTO_RECORD, autoRecord)
                 }
             )
         }
@@ -93,6 +97,7 @@ class CaptivePortalSolverActivity : ComponentActivity() {
 private fun CaptivePortalSolverScreen(
     ssid: String,
     replaySolutionId: Long,
+    autoRecord: Boolean,
     onClose: () -> Unit
 ) {
     val context = LocalContext.current
@@ -106,6 +111,14 @@ private fun CaptivePortalSolverScreen(
     var isRecording by remember { mutableStateOf(false) }
     val isReplayMode = replaySolutionId > 0
     var replaySteps by remember { mutableStateOf<List<CaptivePortalStepEntity>>(emptyList()) }
+
+    LaunchedEffect(autoRecord, isReplayMode, ssid) {
+        if (autoRecord && !isReplayMode && !isRecording) {
+            recorder.startRecording(ssid, CaptivePortalSolverActivity.PORTAL_CHECK_URL)
+            isRecording = true
+            status = "Recording manual steps for $ssid…"
+        }
+    }
 
     // Load replay steps if in replay mode
     LaunchedEffect(replaySolutionId) {
@@ -152,7 +165,7 @@ private fun CaptivePortalSolverScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
-                        Text("Captive Portal Solver", style = MaterialTheme.typography.titleMedium)
+                        Text("Portal Login (In-App)", style = MaterialTheme.typography.titleMedium)
                         Text("Network: $ssid", style = MaterialTheme.typography.bodySmall)
                         Text(status, style = MaterialTheme.typography.bodySmall)
                     }
@@ -239,7 +252,7 @@ private fun CaptivePortalSolverScreen(
                             view?.let { wv ->
                                 if (isReplayMode && replaySteps.isNotEmpty()) {
                                     // Replay mode: inject replay script
-                                    "Replaying ${replaySteps.size} steps…"
+                                    status = "Replaying ${replaySteps.size} steps…"
                                     val replayJs = CaptivePortalRecorder.getReplayJs(replaySteps)
                                     wv.evaluateJavascript(replayJs, null)
                                 } else {

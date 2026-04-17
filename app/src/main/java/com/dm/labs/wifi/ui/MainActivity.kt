@@ -305,7 +305,13 @@ class MainActivity : ComponentActivity() {
                                     }
                                 },
                                 onStopAutoConnect = { AutoConnectService.stop(this@MainActivity) },
-                                onResolvePortal = { CaptivePortalSolverActivity.launch(this@MainActivity) },
+                                onResolvePortal = {
+                                    CaptivePortalSolverActivity.launch(
+                                        context = this@MainActivity,
+                                        ssid = state.connectedSsid ?: "Unknown",
+                                        autoRecord = true
+                                    )
+                                },
                                 modifier = Modifier.weight(1f)
                             )
 
@@ -498,7 +504,7 @@ fun WifiScreen(
 
         if (state.needsPortalLogin) {
             Button(onClick = onResolvePortal) {
-                Text("Resolve Captive Portal")
+                Text("Continue Login (In This App)")
             }
         }
 
@@ -1180,7 +1186,7 @@ private fun SolutionListScreen(
 
         if (solutions.isEmpty()) {
             Text(
-                text = "No recorded solutions yet.\n\nTo record:\n1. Connect to a network with a captive portal\n2. Open the Captive Portal Solver\n3. Tap \"\u23FA Record Steps\"\n4. Solve the portal manually\n5. Tap \"\u23F9 Stop Recording\"",
+                text = "No recorded solutions yet.\n\nTo record:\n1. Connect to a network with a captive portal\n2. Open the in-app portal login screen\n3. Solve the portal manually\n4. Recording starts automatically and is saved when internet is available",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 24.dp)

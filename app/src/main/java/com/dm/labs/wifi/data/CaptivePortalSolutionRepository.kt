@@ -26,6 +26,7 @@ interface CaptivePortalSolutionRepository {
     suspend fun getAllSolutions(): List<CaptivePortalSolutionEntity>
     suspend fun getSolutionsForSsid(ssid: String): List<CaptivePortalSolutionEntity>
     suspend fun getLatestSolutionForSsid(ssid: String): CaptivePortalSolutionEntity?
+    suspend fun getLatestSolutionForSsidAndHost(ssid: String, portalHost: String): CaptivePortalSolutionEntity?
     suspend fun getSolutionWithSteps(solutionId: Long): SolutionWithSteps?
     suspend fun deleteSolution(solutionId: Long)
     suspend fun updateSolutionInfo(solutionId: Long, ssid: String, description: String, portalUrl: String)
@@ -93,6 +94,16 @@ class RoomCaptivePortalSolutionRepository(
 
     override suspend fun getLatestSolutionForSsid(ssid: String): CaptivePortalSolutionEntity? {
         return dao.getSolutionsForSsid(ssid).firstOrNull()
+    }
+
+    override suspend fun getLatestSolutionForSsidAndHost(
+        ssid: String,
+        portalHost: String
+    ): CaptivePortalSolutionEntity? {
+        val normalizedHost = normalizeHost(portalHost) ?: return null
+        return dao.getSolutionsForSsid(ssid).firstOrNull { solution ->
+            normalizeHost(solution.portalUrl) == normalizedHost
+        }
     }
 
     override suspend fun getSolutionWithSteps(solutionId: Long): SolutionWithSteps? {
@@ -218,6 +229,15 @@ class RoomCaptivePortalSolutionRepository(
         }
         obj.put("steps", stepsArr)
         return obj
+    }
+
+    private fun normalizeHost(value: String): String? {
+        val text = value.trim()
+        if (text.isEmpty()) return null
+        return runCatching {
+            val candidate = if (text.contains("://")) text else "https://$text"
+            java.net.URL(candidate).host.lowercase().removePrefix("www.").ifBlank { null }
+        }.getOrNull()
     }
 }
 

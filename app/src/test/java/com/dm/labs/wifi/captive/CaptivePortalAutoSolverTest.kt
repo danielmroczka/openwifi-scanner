@@ -33,7 +33,8 @@ class CaptivePortalAutoSolverTest {
                 assertEquals("Cafe", ssid)
                 assertEquals(7L, id)
             },
-            interactiveLauncher = { interactiveCalled = true },
+            interactiveLauncher = { _, _ -> interactiveCalled = true },
+            portalHostDetector = { null },
             httpSolver = {
                 httpCalled = true
                 false
@@ -61,7 +62,8 @@ class CaptivePortalAutoSolverTest {
             checker = FakeChecker(),
             solutionRepository = repo,
             replayLauncher = { _, _ -> },
-            interactiveLauncher = { interactiveCalled = true },
+            interactiveLauncher = { _, _ -> interactiveCalled = true },
+            portalHostDetector = { null },
             httpSolver = {
                 httpCalled = true
                 true
@@ -80,12 +82,17 @@ class CaptivePortalAutoSolverTest {
     fun `launches interactive solver when replay and http fail`() = runTest {
         val repo = FakeSolutionRepo(solution = null)
         var interactiveCalled = false
+        var interactiveAutoRecord = false
 
         val solver = CaptivePortalAutoSolver(
             checker = FakeChecker(),
             solutionRepository = repo,
             replayLauncher = { _, _ -> },
-            interactiveLauncher = { interactiveCalled = true },
+            interactiveLauncher = { _, autoRecord ->
+                interactiveCalled = true
+                interactiveAutoRecord = autoRecord
+            },
+            portalHostDetector = { null },
             httpSolver = { false },
             resolutionWaiter = { false }
         )
@@ -94,6 +101,38 @@ class CaptivePortalAutoSolverTest {
 
         assertFalse(result)
         assertTrue(interactiveCalled)
+        assertTrue(interactiveAutoRecord)
+    }
+
+    @Test
+    fun `prefers host-matched solution when portal host is known`() = runTest {
+        val hostMatched = CaptivePortalSolutionEntity(
+            id = 12L,
+            ssid = "Cafe",
+            portalUrl = "https://login.cafe-portal.com/welcome"
+        )
+        val fallback = CaptivePortalSolutionEntity(
+            id = 9L,
+            ssid = "Cafe",
+            portalUrl = "https://other.portal/"
+        )
+        val repo = FakeSolutionRepo(solution = fallback, hostMatchedSolution = hostMatched)
+        var replayedId: Long? = null
+
+        val solver = CaptivePortalAutoSolver(
+            checker = FakeChecker(),
+            solutionRepository = repo,
+            replayLauncher = { _, id -> replayedId = id },
+            interactiveLauncher = { _, _ -> },
+            portalHostDetector = { "login.cafe-portal.com" },
+            httpSolver = { false },
+            resolutionWaiter = { true }
+        )
+
+        val result = solver.trySolve("Cafe")
+
+        assertTrue(result)
+        assertEquals(12L, replayedId)
     }
 
     private class FakeChecker : CaptivePortalChecker {
@@ -101,7 +140,8 @@ class CaptivePortalAutoSolverTest {
     }
 
     private class FakeSolutionRepo(
-        private val solution: CaptivePortalSolutionEntity?
+        private val solution: CaptivePortalSolutionEntity?,
+        private val hostMatchedSolution: CaptivePortalSolutionEntity? = null
     ) : CaptivePortalSolutionRepository {
         override suspend fun createSolution(ssid: String, portalUrl: String, description: String): Long = 1L
 
@@ -128,6 +168,17 @@ class CaptivePortalAutoSolverTest {
 
         override suspend fun getLatestSolutionForSsid(ssid: String): CaptivePortalSolutionEntity? =
             if (solution?.ssid == ssid) solution else null
+
+        override suspend fun getLatestSolutionForSsidAndHost(
+            ssid: String,
+            portalHost: String
+        ): CaptivePortalSolutionEntity? {
+            return if (hostMatchedSolution?.ssid == ssid && portalHost.contains("cafe-portal")) {
+                hostMatchedSolution
+            } else {
+                null
+            }
+        }
 
         override suspend fun getSolutionWithSteps(solutionId: Long): SolutionWithSteps? = null
 

@@ -15,21 +15,45 @@ class CaptivePortalRecorder(
     private val repository: CaptivePortalSolutionRepository,
     private val scope: CoroutineScope
 ) {
+    private data class PendingStep(
+        val order: Int,
+        val type: String,
+        val url: String = "",
+        val cssSelector: String = "",
+        val inputValue: String = "",
+        val elementId: String = "",
+        val elementName: String = "",
+        val elementType: String = "",
+        val formData: String = ""
+    )
+
     private var solutionId: Long = -1L
     private var stepCounter = 0
+    private val pendingSteps = mutableListOf<PendingStep>()
     var isRecording = false
         private set
 
     fun startRecording(ssid: String, portalUrl: String) {
+        if (isRecording) return
+        isRecording = true
+        stepCounter = 0
+        solutionId = -1L
+        synchronized(pendingSteps) { pendingSteps.clear() }
+
         scope.launch {
-            solutionId = repository.createSolution(
-                ssid = ssid,
-                portalUrl = portalUrl,
-                description = "Recorded on ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault()).format(java.util.Date())}"
-            )
-            stepCounter = 0
-            isRecording = true
-            ScanLogManager.log("Started recording captive portal solution for '$ssid'")
+            try {
+                solutionId = repository.createSolution(
+                    ssid = ssid,
+                    portalUrl = portalUrl,
+                    description = "Recorded on ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault()).format(java.util.Date())}"
+                )
+                flushPendingSteps()
+                ScanLogManager.log("Started recording captive portal solution for '$ssid'")
+            } catch (e: Exception) {
+                isRecording = false
+                synchronized(pendingSteps) { pendingSteps.clear() }
+                ScanLogManager.log("Failed to start recording for '$ssid': ${e.message}")
+            }
         }
     }
 
@@ -38,35 +62,27 @@ class CaptivePortalRecorder(
         isRecording = false
         scope.launch {
             if (solutionId > 0) {
+                flushPendingSteps()
                 repository.finishRecording(solutionId)
                 ScanLogManager.log("Finished recording solution #$solutionId with $stepCounter steps")
             }
+            synchronized(pendingSteps) { pendingSteps.clear() }
         }
     }
 
     @JavascriptInterface
     fun onNavigation(url: String) {
-        if (!isRecording || solutionId < 0) return
-        val order = stepCounter++
-        scope.launch {
-            repository.addStep(
-                solutionId = solutionId,
-                stepOrder = order,
-                type = "NAVIGATION",
-                url = url
-            )
-        }
+        if (!isRecording) return
+        enqueueStep(PendingStep(order = nextOrder(), type = "NAVIGATION", url = url))
         ScanLogManager.log("Recorded NAVIGATION: $url")
     }
 
     @JavascriptInterface
     fun onClick(cssSelector: String, url: String, elementId: String, elementName: String, elementType: String) {
-        if (!isRecording || solutionId < 0) return
-        val order = stepCounter++
-        scope.launch {
-            repository.addStep(
-                solutionId = solutionId,
-                stepOrder = order,
+        if (!isRecording) return
+        enqueueStep(
+            PendingStep(
+                order = nextOrder(),
                 type = "CLICK",
                 url = url,
                 cssSelector = cssSelector,
@@ -74,18 +90,16 @@ class CaptivePortalRecorder(
                 elementName = elementName,
                 elementType = elementType
             )
-        }
+        )
         ScanLogManager.log("Recorded CLICK: $cssSelector")
     }
 
     @JavascriptInterface
     fun onInput(cssSelector: String, value: String, elementId: String, elementName: String, elementType: String) {
-        if (!isRecording || solutionId < 0) return
-        val order = stepCounter++
-        scope.launch {
-            repository.addStep(
-                solutionId = solutionId,
-                stepOrder = order,
+        if (!isRecording) return
+        enqueueStep(
+            PendingStep(
+                order = nextOrder(),
                 type = "INPUT",
                 cssSelector = cssSelector,
                 inputValue = value,
@@ -93,25 +107,63 @@ class CaptivePortalRecorder(
                 elementName = elementName,
                 elementType = elementType
             )
-        }
+        )
         ScanLogManager.log("Recorded INPUT: $cssSelector = $value")
     }
 
     @JavascriptInterface
     fun onFormSubmit(url: String, formData: String, cssSelector: String) {
-        if (!isRecording || solutionId < 0) return
-        val order = stepCounter++
-        scope.launch {
-            repository.addStep(
-                solutionId = solutionId,
-                stepOrder = order,
+        if (!isRecording) return
+        enqueueStep(
+            PendingStep(
+                order = nextOrder(),
                 type = "FORM_SUBMIT",
                 url = url,
                 cssSelector = cssSelector,
                 formData = formData
             )
-        }
+        )
         ScanLogManager.log("Recorded FORM_SUBMIT: $url")
+    }
+
+    private fun nextOrder(): Int = stepCounter++
+
+    private fun enqueueStep(step: PendingStep) {
+        val currentSolutionId = solutionId
+        if (currentSolutionId > 0) {
+            scope.launch { persistStep(currentSolutionId, step) }
+        } else {
+            synchronized(pendingSteps) { pendingSteps.add(step) }
+        }
+    }
+
+    private suspend fun flushPendingSteps() {
+        val currentSolutionId = solutionId
+        if (currentSolutionId <= 0) return
+        val toPersist = synchronized(pendingSteps) {
+            if (pendingSteps.isEmpty()) return
+            val copy = pendingSteps.toList()
+            pendingSteps.clear()
+            copy
+        }
+        for (step in toPersist) {
+            persistStep(currentSolutionId, step)
+        }
+    }
+
+    private suspend fun persistStep(solutionId: Long, step: PendingStep) {
+        repository.addStep(
+            solutionId = solutionId,
+            stepOrder = step.order,
+            type = step.type,
+            url = step.url,
+            cssSelector = step.cssSelector,
+            inputValue = step.inputValue,
+            elementId = step.elementId,
+            elementName = step.elementName,
+            elementType = step.elementType,
+            formData = step.formData
+        )
     }
 
     companion object {

@@ -22,14 +22,21 @@ class CaptivePortalAutoSolver(
     private val checker: CaptivePortalChecker,
     private val solutionRepository: CaptivePortalSolutionRepository? = null,
     private val replayLauncher: ((String, Long) -> Unit),
-    private val interactiveLauncher: ((String) -> Unit),
+    private val interactiveLauncher: ((String, Boolean) -> Unit),
+    private val portalHostDetector: (suspend () -> String?)? = null,
     private val httpSolver: (suspend () -> Boolean)? = null,
     private val resolutionWaiter: (suspend (Long) -> Boolean)? = null
 ) {
     suspend fun trySolve(ssid: String?): Boolean {
         val knownSsid = ssid?.takeIf { it.isNotBlank() }
         if (knownSsid != null && solutionRepository != null) {
-            val solution = solutionRepository.getLatestSolutionForSsid(knownSsid)
+            val portalHost = portalHostDetector?.invoke() ?: detectPortalHostFromRedirect()
+            val solution = if (portalHost != null) {
+                solutionRepository.getLatestSolutionForSsidAndHost(knownSsid, portalHost)
+                    ?: solutionRepository.getLatestSolutionForSsid(knownSsid)
+            } else {
+                solutionRepository.getLatestSolutionForSsid(knownSsid)
+            }
             if (solution != null) {
                 ScanLogManager.log("Found saved portal steps for $knownSsid. Trying replay…")
                 replayLauncher(knownSsid, solution.id)
@@ -49,13 +56,32 @@ class CaptivePortalAutoSolver(
         }
 
         ScanLogManager.log("HTTP solve failed. Launching interactive solver…")
-        interactiveLauncher(knownSsid ?: "Unknown")
+        // If HTTP failed we need user interaction; for unknown/new portals we auto-record steps.
+        interactiveLauncher(knownSsid ?: "Unknown", true)
 
         return waitForResolutionOrInjected(120_000L)
     }
 
     private suspend fun waitForResolutionOrInjected(timeoutMs: Long): Boolean {
         return resolutionWaiter?.invoke(timeoutMs) ?: waitForResolution(timeoutMs)
+    }
+
+    @Suppress("TooGenericExceptionCaught")
+    private suspend fun detectPortalHostFromRedirect(): String? = withContext(Dispatchers.IO) {
+        try {
+            val conn = (URL(CONNECTIVITY_CHECK).openConnection() as HttpURLConnection).apply {
+                instanceFollowRedirects = false
+                connectTimeout = 3_000
+                readTimeout = 3_000
+                setRequestProperty("User-Agent", UA)
+            }
+            val code = conn.responseCode
+            val location = if (code in 300..399) conn.getHeaderField("Location") else null
+            conn.disconnect()
+            location?.let { URL(it).host?.lowercase()?.ifBlank { null } }
+        } catch (_: Exception) {
+            null
+        }
     }
 
     /* ---- HTTP-based auto-solve ---------------------------------------------------- */
@@ -161,8 +187,8 @@ class CaptivePortalAutoSolver(
                 replayLauncher = { ssid, solutionId ->
                     CaptivePortalSolverActivity.launchReplay(context, ssid, solutionId)
                 },
-                interactiveLauncher = { ssid ->
-                    CaptivePortalSolverActivity.launch(context, ssid)
+                interactiveLauncher = { ssid, autoRecord ->
+                    CaptivePortalSolverActivity.launch(context, ssid, autoRecord)
                 }
             )
         }

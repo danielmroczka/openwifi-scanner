@@ -102,5 +102,27 @@ Notes & gotchas
 - Auto-connect uses the `WifiNetworkSuggestion` API first, and falls back to `WifiNetworkSpecifier` which shows a system dialog; changing connection behaviour must consider API-level differences (see `AndroidWifiConnector.connectToOpenNetwork`).
 - `CaptivePortalAutoSolver` performs HTTP-based form submission using permissive regexes. Be careful when editing regex patterns — they intentionally accept imperfect HTML.
 
+Captive portal field-test checklist (real device)
+
+1. Clean state:
+   - Remove previous solution for target SSID in the Solutions tab.
+   - Forget network from Android Wi-Fi settings (optional but recommended for clean run).
+2. First connection (recording expected):
+   - Connect to the open Wi-Fi from app (manual or Auto-Connect flow).
+   - Confirm status indicates captive portal detected.
+   - Open solver from button/notification and complete login manually.
+   - Wait until solver closes with internet validated.
+   - In Solutions tab verify a new entry exists for that SSID with non-zero step count.
+3. Second connection (replay expected):
+   - Disconnect Wi-Fi (or move out/in range) and reconnect to the same SSID.
+   - Confirm app attempts replay first (log should mention saved steps/replay).
+   - Verify internet is restored without manual portal taps.
+4. Negative check (safe fallback):
+   - If replay fails (portal changed), verify app falls back to HTTP attempt and then interactive solver.
+   - Ensure network is not left stuck indefinitely (either solved or cooldown/disconnect path).
+5. Logs to collect when debugging:
+   - Logs tab (`ScanLogManager`) entries for detect/replay/http/interactive stages.
+   - Dev logs from `files/dev_logs/*` to capture errors and timing.
+
 If you'd like, I can add a small sample test double package (`app/src/test/.../fakes`) containing reusable fakes for `WifiScanner`/`WifiConnector`/`CaptivePortalChecker` — say the word and I'll add it.
 

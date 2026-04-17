@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
 import android.os.Build
@@ -15,6 +16,7 @@ import com.dm.labs.wifi.R
 import com.dm.labs.wifi.approval.NetworkApprovalManager
 import com.dm.labs.wifi.approval.PendingNetworkApproval
 import com.dm.labs.wifi.captive.CaptivePortalAutoSolver
+import com.dm.labs.wifi.captive.CaptivePortalSolverActivity
 import com.dm.labs.wifi.data.AppDatabase
 import com.dm.labs.wifi.data.RoomCaptivePortalSolutionRepository
 import com.dm.labs.wifi.data.RoomWifiNetworkRepository
@@ -49,6 +51,7 @@ class AutoConnectService : Service() {
     private lateinit var captivePortalRecoveryHandler: CaptivePortalRecoveryHandler
     private lateinit var appSettings: AppSettings
     private val approvalNotificationId = NOTIFICATION_ID + 1
+    private val captivePortalNotificationId = NOTIFICATION_ID + 2
 
     override fun onCreate() {
         super.onCreate()
@@ -63,7 +66,16 @@ class AutoConnectService : Service() {
         val solutionRepository = RoomCaptivePortalSolutionRepository(database.captivePortalSolutionDao())
 
         coordinator = AutoConnectCoordinator(scanner, connector, checker, repository)
-        portalSolver = CaptivePortalAutoSolver.create(applicationContext, checker, solutionRepository)
+        portalSolver = CaptivePortalAutoSolver(
+            checker = checker,
+            solutionRepository = solutionRepository,
+            replayLauncher = { ssid, solutionId ->
+                launchSolverOrNotify(ssid = ssid, autoRecord = false, replaySolutionId = solutionId)
+            },
+            interactiveLauncher = { ssid, autoRecord ->
+                launchSolverOrNotify(ssid = ssid, autoRecord = autoRecord, replaySolutionId = null)
+            }
+        )
         captivePortalRecoveryHandler = CaptivePortalRecoveryHandler(
             portalSolver = { ssid -> portalSolver.trySolve(ssid) },
             disconnectCurrentNetwork = { connector.disconnectCurrentNetwork() },
@@ -96,6 +108,7 @@ class AutoConnectService : Service() {
         shouldRun = false
         autoJob?.cancel()
         clearApprovalNotification()
+        clearCaptivePortalNotification()
         NetworkApprovalManager.clear()
         if (::connector.isInitialized) {
             connector.disconnectCurrentNetwork()
@@ -160,6 +173,7 @@ class AutoConnectService : Service() {
                                 attempts = attempts,
                                 pushState = { pushState(it) }
                             )
+                            clearCaptivePortalNotification()
                             connected = recoveryState.hasValidatedInternet
                         }
 
@@ -260,6 +274,76 @@ class AutoConnectService : Service() {
     private fun clearApprovalNotification() {
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         manager.cancel(approvalNotificationId)
+    }
+
+    private fun clearCaptivePortalNotification() {
+        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        manager.cancel(captivePortalNotificationId)
+    }
+
+    private fun launchSolverOrNotify(ssid: String, autoRecord: Boolean, replaySolutionId: Long?) {
+        val started = launchSolverActivitySafely(ssid, autoRecord, replaySolutionId)
+        if (started) {
+            clearCaptivePortalNotification()
+            return
+        }
+
+        val solverIntent = Intent(this, CaptivePortalSolverActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            putExtra(CaptivePortalSolverActivity.EXTRA_SSID, ssid)
+            putExtra(CaptivePortalSolverActivity.EXTRA_AUTO_RECORD, autoRecord)
+            replaySolutionId?.let {
+                putExtra(CaptivePortalSolverActivity.EXTRA_REPLAY_SOLUTION_ID, it)
+            }
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            this,
+            777,
+            solverIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val modeLabel = if (replaySolutionId != null) "replay" else "manual"
+        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle("Portal login needed in this app")
+            .setContentText("$ssid requires sign-in. Tap to continue in-app ($modeLabel mode).")
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_STATUS)
+            .setAutoCancel(true)
+            .setContentIntent(pendingIntent)
+            .addAction(0, "Continue in app", pendingIntent)
+            .build()
+
+        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        manager.notify(captivePortalNotificationId, notification)
+        ScanLogManager.log("Captive portal on $ssid: waiting for user action in notification.")
+    }
+
+    private fun launchSolverActivitySafely(ssid: String, autoRecord: Boolean, replaySolutionId: Long?): Boolean {
+        if (!isAppInForeground()) {
+            return false
+        }
+        return runCatching {
+            val intent = Intent(this, CaptivePortalSolverActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                putExtra(CaptivePortalSolverActivity.EXTRA_SSID, ssid)
+                putExtra(CaptivePortalSolverActivity.EXTRA_AUTO_RECORD, autoRecord)
+                replaySolutionId?.let {
+                    putExtra(CaptivePortalSolverActivity.EXTRA_REPLAY_SOLUTION_ID, it)
+                }
+            }
+            startActivity(intent)
+        }.onFailure {
+            DevLog.w("Unable to launch solver activity directly: ${it.message}")
+        }.isSuccess
+    }
+
+    private fun isAppInForeground(): Boolean {
+        val processInfo = ActivityManager.RunningAppProcessInfo()
+        ActivityManager.getMyMemoryState(processInfo)
+        return processInfo.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND ||
+            processInfo.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_VISIBLE
     }
 
     private fun ensureNotificationChannel() {

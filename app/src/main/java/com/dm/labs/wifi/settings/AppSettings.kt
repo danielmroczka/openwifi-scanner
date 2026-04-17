@@ -2,6 +2,7 @@ package com.dm.labs.wifi.settings
 
 import android.content.Context
 import android.content.SharedPreferences
+import androidx.core.content.edit
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -28,21 +29,21 @@ class AppSettings private constructor(private val prefs: SharedPreferences) {
         get() = _state.value.scanIntervalSeconds
         set(value) {
             val clamped = value.coerceIn(MIN_SCAN_INTERVAL, MAX_SCAN_INTERVAL)
-            prefs.edit().putInt(KEY_SCAN_INTERVAL, clamped).apply()
+            prefs.edit { putInt(KEY_SCAN_INTERVAL, clamped) }
             _state.value = _state.value.copy(scanIntervalSeconds = clamped)
         }
 
     var autoStartOnBoot: Boolean
         get() = _state.value.autoStartOnBoot
         set(value) {
-            prefs.edit().putBoolean(KEY_AUTO_START, value).apply()
+            prefs.edit { putBoolean(KEY_AUTO_START, value) }
             _state.value = _state.value.copy(autoStartOnBoot = value)
         }
 
     var developerLogging: Boolean
         get() = _state.value.developerLogging
         set(value) {
-            prefs.edit().putBoolean(KEY_DEV_LOGGING, value).apply()
+            prefs.edit { putBoolean(KEY_DEV_LOGGING, value) }
             _state.value = _state.value.copy(developerLogging = value)
         }
 

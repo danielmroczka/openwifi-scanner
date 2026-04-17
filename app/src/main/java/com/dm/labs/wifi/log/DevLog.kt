@@ -6,6 +6,7 @@ import com.dm.labs.wifi.settings.AppSettings
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -48,7 +49,7 @@ object DevLog {
         Log.d(TAG, message)
         if (settings?.developerLogging != true) return
         val entry = DevLogEntry(System.currentTimeMillis(), "DEBUG", message)
-        _logEntries.value = _logEntries.value + entry
+        _logEntries.update { it + entry }
         writeToFile("DEBUG", message)
     }
 
@@ -57,7 +58,7 @@ object DevLog {
         Log.i(TAG, message)
         if (settings?.developerLogging != true) return
         val entry = DevLogEntry(System.currentTimeMillis(), "INFO", message)
-        _logEntries.value = _logEntries.value + entry
+        _logEntries.update { it + entry }
         writeToFile("INFO", message)
     }
 
@@ -66,7 +67,7 @@ object DevLog {
         Log.w(TAG, message)
         if (settings?.developerLogging != true) return
         val entry = DevLogEntry(System.currentTimeMillis(), "WARN", message)
-        _logEntries.value = _logEntries.value + entry
+        _logEntries.update { it + entry }
         writeToFile("WARN", message)
     }
 
@@ -76,7 +77,7 @@ object DevLog {
         if (settings?.developerLogging != true) return
         val full = if (throwable != null) "$message\n${throwable.stackTraceToString()}" else message
         val entry = DevLogEntry(System.currentTimeMillis(), "ERROR", full)
-        _logEntries.value = _logEntries.value + entry
+        _logEntries.update { it + entry }
         writeToFile("ERROR", full)
     }
 

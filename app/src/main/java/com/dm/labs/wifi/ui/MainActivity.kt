@@ -403,8 +403,8 @@ class MainActivity : ComponentActivity() {
             Manifest.permission.CHANGE_WIFI_STATE
         )
 
-        // POST_NOTIFICATIONS is required starting from Android 12 (API 31) for foreground services
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        // Runtime request for notifications is required only on Android 13+ (API 33).
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             permissions.add(Manifest.permission.POST_NOTIFICATIONS)
         }
 

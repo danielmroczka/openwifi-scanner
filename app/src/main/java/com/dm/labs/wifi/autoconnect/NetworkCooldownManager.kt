@@ -1,6 +1,7 @@
 package com.dm.labs.wifi.autoconnect
 
 import com.dm.labs.wifi.log.DevLog
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Tracks networks that failed to provide internet after connecting.
@@ -10,7 +11,8 @@ object NetworkCooldownManager {
     private const val COOLDOWN_MS = 60 * 60 * 1000L // 1 hour
 
     // Key: SSID, Value: timestamp when cooldown expires
-    private val cooldowns = mutableMapOf<String, Long>()
+    // ConcurrentHashMap is used to avoid data races when accessed from multiple coroutines.
+    private val cooldowns = ConcurrentHashMap<String, Long>()
 
     fun putOnCooldown(ssid: String) {
         val until = System.currentTimeMillis() + COOLDOWN_MS

@@ -23,6 +23,7 @@ object NetworkApprovalManager {
     private val decisionChannel = Channel<UserNetworkDecision>(capacity = Channel.BUFFERED)
 
     fun requestApproval(network: PendingNetworkApproval) {
+        drainQueuedDecisions()
         _pending.value = network
     }
 
@@ -36,12 +37,20 @@ object NetworkApprovalManager {
     }
 
     fun submitDecision(decision: UserNetworkDecision) {
+        if (_pending.value == null) return
         _pending.value = null
         decisionChannel.trySend(decision)
     }
 
     fun clear() {
         _pending.value = null
+        drainQueuedDecisions()
+    }
+
+    private fun drainQueuedDecisions() {
+        while (decisionChannel.tryReceive().isSuccess) {
+            // Drop stale decisions from old notifications/timeouts.
+        }
     }
 }
 

@@ -21,14 +21,18 @@ class BootReceiver : BroadcastReceiver() {
         if (settings.autoStartOnBoot) {
             DevLog.i("Boot completed — auto-start is enabled, launching service with delay…")
             ScanLogManager.log("Device booted — starting auto-connect service…")
+            val pendingResult = goAsync()
+            val appContext = context.applicationContext
 
             // Delayed start: give system 10 seconds to settle
             Thread {
                 try {
                     Thread.sleep(10_000)
-                    AutoConnectService.start(context)
+                    AutoConnectService.start(appContext)
                 } catch (e: Exception) {
                     DevLog.e("Failed to start service after boot", e)
+                } finally {
+                    pendingResult.finish()
                 }
             }.start()
         } else {

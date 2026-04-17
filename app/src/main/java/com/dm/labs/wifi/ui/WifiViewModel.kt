@@ -145,30 +145,9 @@ class WifiViewModel(
 
                 ScanLogManager.log("Scanned ${networks.size} open networks (grouped to ${groupedNetworks.size} SSIDs).")
 
-                // If we have a repository and some whitelisted networks, attempt to auto-connect
-                // to the first matching whitelisted BSSID we see. This helps when a network was
-                // previously marked as favourite/whitelisted but no connection happened automatically.
-                val repo = repository
-                // Only attempt automatic connection to whitelisted networks if app settings allow
-                // this behaviour (guard against unexpected background connect attempts).
-                if (repo != null && appSettings?.state?.value?.autoStartOnBoot == true) {
-                    try {
-                        val whitelisted = repo.getWhitelistedNetworks().map { it.bssid }.toSet()
-                        val detectedBssids = networks.map { it.bssid }.toSet()
-                        val matching = detectedBssids.intersect(whitelisted)
-                        if (matching.isNotEmpty()) {
-                            val matchedBssid = matching.first()
-                            val matchedSsid = networks.find { it.bssid == matchedBssid }?.ssid
-                            if (matchedSsid != null && _uiState.value.connectedSsid != matchedSsid) {
-                                _uiState.update { it.copy(statusMessage = "Found favourite network $matchedSsid — attempting to connect...") }
-                                // Use existing connect flow which will update isConnecting/status appropriately
-                                connectToNetwork(matchedSsid)
-                            }
-                        }
-                    } catch (e: Exception) {
-                        ScanLogManager.log("Error while checking whitelisted networks: ${e.message}")
-                    }
-                }
+                // Auto-connecting to whitelisted networks during foreground scans is intentionally
+                // disabled here – it can surprise the user when scanning manually. The background
+                // AutoConnectService handles this when the user starts it explicitly.
             }
                 .onFailure { error ->
                     _uiState.update {

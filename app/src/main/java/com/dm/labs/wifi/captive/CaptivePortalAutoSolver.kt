@@ -69,16 +69,18 @@ class CaptivePortalAutoSolver(
     @Suppress("TooGenericExceptionCaught")
     private suspend fun detectPortalHostFromRedirect(): String? = withContext(Dispatchers.IO) {
         try {
-            val conn = (URL(CONNECTIVITY_CHECK).openConnection() as HttpURLConnection).apply {
-                instanceFollowRedirects = false
-                connectTimeout = 3_000
-                readTimeout = 3_000
-                setRequestProperty("User-Agent", UA)
+            val conn = URL(CONNECTIVITY_CHECK).openConnection() as HttpURLConnection
+            try {
+                conn.instanceFollowRedirects = false
+                conn.connectTimeout = 3_000
+                conn.readTimeout = 3_000
+                conn.setRequestProperty("User-Agent", UA)
+                val code = conn.responseCode
+                val location = if (code in 300..399) conn.getHeaderField("Location") else null
+                location?.let { URL(it).host?.lowercase()?.ifBlank { null } }
+            } finally {
+                conn.disconnect()
             }
-            val code = conn.responseCode
-            val location = if (code in 300..399) conn.getHeaderField("Location") else null
-            conn.disconnect()
-            location?.let { URL(it).host?.lowercase()?.ifBlank { null } }
         } catch (_: Exception) {
             null
         }
@@ -89,57 +91,73 @@ class CaptivePortalAutoSolver(
     @Suppress("TooGenericExceptionCaught")
     private suspend fun trySolveViaHttp(): Boolean = withContext(Dispatchers.IO) {
         try {
-            val checkConn = (URL(CONNECTIVITY_CHECK).openConnection() as HttpURLConnection).apply {
-                instanceFollowRedirects = false
-                connectTimeout = 10_000
-                readTimeout = 10_000
-                setRequestProperty("User-Agent", UA)
-            }
-            val code = checkConn.responseCode
-            if (code == 204) {
-                checkConn.disconnect(); return@withContext true
+            // Step 1: check connectivity, follow redirect to find portal URL
+            val portalUrl: String?
+            val checkConn = URL(CONNECTIVITY_CHECK).openConnection() as HttpURLConnection
+            try {
+                checkConn.instanceFollowRedirects = false
+                checkConn.connectTimeout = 10_000
+                checkConn.readTimeout = 10_000
+                checkConn.setRequestProperty("User-Agent", UA)
+                val code = checkConn.responseCode
+                if (code == 204) return@withContext true
+                portalUrl = if (code in 300..399) checkConn.getHeaderField("Location") else null
+            } finally {
+                checkConn.disconnect()
             }
 
-            val portalUrl = if (code in 300..399) checkConn.getHeaderField("Location") else null
-            checkConn.disconnect()
             if (portalUrl.isNullOrBlank()) return@withContext false
 
-            val portalConn = (URL(portalUrl).openConnection() as HttpURLConnection).apply {
-                connectTimeout = 10_000; readTimeout = 10_000
-                setRequestProperty("User-Agent", UA)
+            // Step 2: fetch portal page and extract form
+            val html: String
+            val cookies: String?
+            val portalConn = URL(portalUrl).openConnection() as HttpURLConnection
+            try {
+                portalConn.connectTimeout = 10_000
+                portalConn.readTimeout = 10_000
+                portalConn.setRequestProperty("User-Agent", UA)
+                html = portalConn.inputStream.bufferedReader().readText()
+                cookies = portalConn.headerFields["Set-Cookie"]
+                    ?.joinToString("; ") { it.substringBefore(";") }
+            } finally {
+                portalConn.disconnect()
             }
-            val html = portalConn.inputStream.bufferedReader().readText()
-            val cookies = portalConn.headerFields["Set-Cookie"]
-                ?.joinToString("; ") { it.substringBefore(";") }
-            portalConn.disconnect()
 
             val formAction = FORM_ACTION_RE.find(html)?.groupValues?.get(1) ?: ""
             val params = INPUT_RE.findAll(html).mapNotNull { parseInput(it.value) }
                 .joinToString("&")
-
             val submitUrl = resolveUrl(portalUrl, formAction)
 
-            val submitConn = (URL(submitUrl).openConnection() as HttpURLConnection).apply {
-                requestMethod = "POST"; doOutput = true
-                connectTimeout = 10_000; readTimeout = 10_000
-                setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
-                setRequestProperty("User-Agent", UA)
-                cookies?.let { setRequestProperty("Cookie", it) }
+            // Step 3: submit form
+            val submitConn = URL(submitUrl).openConnection() as HttpURLConnection
+            try {
+                submitConn.requestMethod = "POST"
+                submitConn.doOutput = true
+                submitConn.connectTimeout = 10_000
+                submitConn.readTimeout = 10_000
+                submitConn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
+                submitConn.setRequestProperty("User-Agent", UA)
+                cookies?.let { submitConn.setRequestProperty("Cookie", it) }
+                submitConn.outputStream.write(params.toByteArray())
+                submitConn.responseCode // consume response
+            } finally {
+                submitConn.disconnect()
             }
-            submitConn.outputStream.write(params.toByteArray())
-            submitConn.responseCode
-            submitConn.disconnect()
 
+            // Step 4: verify internet is now open
             delay(3_000)
-            val verify = (URL(CONNECTIVITY_CHECK).openConnection() as HttpURLConnection).apply {
-                instanceFollowRedirects = false; connectTimeout = 5_000; readTimeout = 5_000
+            val verify = URL(CONNECTIVITY_CHECK).openConnection() as HttpURLConnection
+            try {
+                verify.instanceFollowRedirects = false
+                verify.connectTimeout = 5_000
+                verify.readTimeout = 5_000
+                verify.responseCode == 204
+            } finally {
+                verify.disconnect()
             }
-            val ok = verify.responseCode == 204
-            verify.disconnect()
-            return@withContext ok
         } catch (e: Exception) {
             ScanLogManager.log("HTTP portal solve error: ${e.message}")
-            return@withContext false
+            false
         }
     }
 

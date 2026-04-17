@@ -100,6 +100,7 @@ import com.dm.labs.wifi.platform.AndroidCaptivePortalChecker
 import com.dm.labs.wifi.platform.AndroidWifiConnector
 import com.dm.labs.wifi.platform.AndroidWifiScanner
 import com.dm.labs.wifi.settings.AppSettings
+import com.dm.labs.wifi.settings.AppSettingsState
 import com.dm.labs.wifi.ui.theme.WIFITheme
 
 private data class NavItem(val label: String, val icon: @Composable () -> Unit)
@@ -372,18 +373,20 @@ class MainActivity : ComponentActivity() {
                             3 -> LogsScreen(
                                 logs = logs,
                                 onClearLogs = { ScanLogManager.clearLogs() },
+                                onClearDevLogs = { DevLog.clearLogs() },
                                 onExportDevLogs = {
                                     scope.launch {
                                         val content = DevLog.readAllLogs()
                                         if (content.isNotEmpty()) {
                                             exportJson = content
-                                            exportFileName = "dev_logs_export.txt"
+                                            exportFileName = buildDevLogsExportFileName()
                                             exportDocLauncher.launch(exportFileName)
                                         } else {
                                             Toast.makeText(this@MainActivity, "No dev logs to export", Toast.LENGTH_SHORT).show()
                                         }
                                     }
                                 },
+                                appSettings = appSettings,
                                 modifier = Modifier.weight(1f)
                             )
                         }
@@ -409,6 +412,14 @@ class MainActivity : ComponentActivity() {
             permissions.add(Manifest.permission.NEARBY_WIFI_DEVICES)
         }
         return permissions.toTypedArray()
+    }
+
+    private fun buildDevLogsExportFileName(nowMillis: Long = System.currentTimeMillis()): String {
+        val timestamp = java.text.SimpleDateFormat(
+            "yyyy-MM-dd_HH-mm-ss",
+            java.util.Locale.US
+        ).format(java.util.Date(nowMillis))
+        return "dev_logs_export_$timestamp.txt"
     }
 
     private fun hasRequiredPermissions(): Boolean {
@@ -1820,10 +1831,13 @@ private fun EditStepDialog(
 fun LogsScreen(
     logs: List<ScanLog>,
     onClearLogs: () -> Unit,
+    onClearDevLogs: () -> Unit,
     onExportDevLogs: () -> Unit,
+    appSettings: AppSettings? = null,
     modifier: Modifier = Modifier
 ) {
     var showScanLogs by remember { mutableStateOf(true) }
+    val settingsState by (appSettings?.state?.collectAsState() ?: remember { mutableStateOf(AppSettingsState()) })
 
     Column(modifier = modifier
         .fillMaxSize()
@@ -1893,13 +1907,9 @@ fun LogsScreen(
             }
         } else {
             // ── Dev Logs ──
-            val devLogContent = remember { mutableStateOf("") }
             val devLogFiles = remember { mutableStateOf(DevLog.getLogFiles()) }
-
-            LaunchedEffect(showScanLogs) {
-                devLogFiles.value = DevLog.getLogFiles()
-                devLogContent.value = DevLog.readAllLogs()
-            }
+            val devLogEntries by DevLog.logEntries.collectAsState()
+            val scrollState = rememberScrollState()
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -1907,34 +1917,93 @@ fun LogsScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    "Dev Logs (${devLogFiles.value.size} file${if (devLogFiles.value.size != 1) "s" else ""})",
+                    "Dev Logs (${devLogEntries.size} entries)",
                     style = MaterialTheme.typography.titleMedium
                 )
-                Button(
-                    onClick = onExportDevLogs,
-                    enabled = devLogContent.value.isNotEmpty()
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Text("📤 Export")
+                    Button(
+                        onClick = onClearDevLogs,
+                        enabled = devLogEntries.isNotEmpty(),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.errorContainer
+                        )
+                    ) {
+                        Text("🗑️ Clear")
+                    }
+                    Button(
+                        onClick = onExportDevLogs,
+                        enabled = devLogEntries.isNotEmpty()
+                    ) {
+                        Text("📤 Export")
+                    }
                 }
             }
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            if (devLogContent.value.isEmpty()) {
-                Text(
-                    "No developer logs.\n\nEnable developer logging in Settings to capture detailed troubleshooting data.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            } else {
-                SelectionContainer(modifier = Modifier.weight(1f)) {
+            if (devLogEntries.isEmpty()) {
+                if (settingsState.developerLogging) {
                     Text(
-                        text = devLogContent.value,
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .verticalScroll(rememberScrollState())
+                        "No developer logs recorded yet.\nStart the auto-connect service or scan to capture logs.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                } else {
+                    Text(
+                        "Developer logging is disabled.\n\nEnable it in Settings to capture detailed troubleshooting data.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .padding(top = 8.dp),
+                    verticalArrangement = Arrangement.Bottom,
+                    reverseLayout = true
+                ) {
+                    items(
+                        items = devLogEntries.asReversed(),
+                        key = { "${it.timestamp}:${it.message}" }
+                    ) { entry ->
+                        SelectionContainer(modifier = Modifier.fillMaxWidth()) {
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = 4.dp),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = when (entry.level) {
+                                        "ERROR" -> MaterialTheme.colorScheme.errorContainer
+                                        "WARN" -> MaterialTheme.colorScheme.surfaceVariant
+                                        else -> MaterialTheme.colorScheme.surface
+                                    }
+                                )
+                            ) {
+                                Column(modifier = Modifier.padding(8.dp)) {
+                                    Text(
+                                        text = java.text.SimpleDateFormat(
+                                            "HH:mm:ss.SSS",
+                                            java.util.Locale.getDefault()
+                                        ).format(java.util.Date(entry.timestamp)) + " [${entry.level}]",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = when (entry.level) {
+                                            "ERROR" -> MaterialTheme.colorScheme.error
+                                            "WARN" -> MaterialTheme.colorScheme.onSurfaceVariant
+                                            else -> MaterialTheme.colorScheme.onSurface
+                                        }
+                                    )
+                                    Text(
+                                        text = entry.message,
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }

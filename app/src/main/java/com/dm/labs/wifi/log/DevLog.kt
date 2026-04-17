@@ -3,6 +3,9 @@ package com.dm.labs.wifi.log
 import android.content.Context
 import android.util.Log
 import com.dm.labs.wifi.settings.AppSettings
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -14,6 +17,8 @@ import java.util.concurrent.Executors
  * Only writes when developer logging is enabled in settings.
  * Each day gets its own file: dev_log_2026-04-13.txt
  */
+data class DevLogEntry(val timestamp: Long, val level: String, val message: String)
+
 object DevLog {
     private const val TAG = "WiFiDevLog"
     private const val LOG_DIR = "dev_logs"
@@ -22,6 +27,9 @@ object DevLog {
     private val executor = Executors.newSingleThreadExecutor()
     private val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.US)
     private val timestampFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
+
+    private val _logEntries = MutableStateFlow<List<DevLogEntry>>(emptyList())
+    val logEntries: StateFlow<List<DevLogEntry>> = _logEntries.asStateFlow()
 
     @Volatile
     private var appContext: Context? = null
@@ -39,6 +47,8 @@ object DevLog {
     fun d(message: String) {
         Log.d(TAG, message)
         if (settings?.developerLogging != true) return
+        val entry = DevLogEntry(System.currentTimeMillis(), "DEBUG", message)
+        _logEntries.value = _logEntries.value + entry
         writeToFile("DEBUG", message)
     }
 
@@ -46,6 +56,8 @@ object DevLog {
     fun i(message: String) {
         Log.i(TAG, message)
         if (settings?.developerLogging != true) return
+        val entry = DevLogEntry(System.currentTimeMillis(), "INFO", message)
+        _logEntries.value = _logEntries.value + entry
         writeToFile("INFO", message)
     }
 
@@ -53,6 +65,8 @@ object DevLog {
     fun w(message: String) {
         Log.w(TAG, message)
         if (settings?.developerLogging != true) return
+        val entry = DevLogEntry(System.currentTimeMillis(), "WARN", message)
+        _logEntries.value = _logEntries.value + entry
         writeToFile("WARN", message)
     }
 
@@ -61,6 +75,8 @@ object DevLog {
         Log.e(TAG, message, throwable)
         if (settings?.developerLogging != true) return
         val full = if (throwable != null) "$message\n${throwable.stackTraceToString()}" else message
+        val entry = DevLogEntry(System.currentTimeMillis(), "ERROR", full)
+        _logEntries.value = _logEntries.value + entry
         writeToFile("ERROR", full)
     }
 
@@ -70,6 +86,24 @@ object DevLog {
         val dir = File(ctx.filesDir, LOG_DIR)
         if (!dir.exists()) return emptyList()
         return dir.listFiles()?.toList()?.sortedByDescending { it.name } ?: emptyList()
+    }
+
+    /** Clear all in-memory dev log entries and delete log files. */
+    fun clearLogs() {
+        _logEntries.value = emptyList()
+        executor.execute {
+            try {
+                val ctx = appContext ?: return@execute
+                val dir = File(ctx.filesDir, LOG_DIR)
+                if (dir.exists()) {
+                    dir.listFiles()?.forEach { file ->
+                        file.delete()
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to clear dev logs", e)
+            }
+        }
     }
 
     /** Read full content of all log files. */

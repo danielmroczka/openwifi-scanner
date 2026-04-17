@@ -181,7 +181,6 @@ class AutoConnectService : Service() {
                     }
                 } else {
                     val status = checker.getStatus()
-                    DevLog.d("Connection monitor check: $status")
                     when (status) {
                         CaptivePortalStatus.OPEN_INTERNET -> {
                             pushState(

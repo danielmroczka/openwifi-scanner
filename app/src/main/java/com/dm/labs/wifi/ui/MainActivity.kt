@@ -49,11 +49,13 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -73,6 +75,8 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
 import androidx.core.content.PermissionChecker
 import androidx.core.net.toUri
@@ -2010,6 +2014,7 @@ fun LogsScreen(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsDialog(
     appSettings: AppSettings,
@@ -2022,18 +2027,19 @@ fun SettingsDialog(
     }
     var showExitConfirm by remember { mutableStateOf(false) }
 
+    // ── Exit confirmation dialog ──
     if (showExitConfirm) {
         AlertDialog(
             onDismissRequest = { showExitConfirm = false },
-            title = { Text("Close app") },
-            text = { Text("This will stop background auto-connect service and close the app.") },
+            title = { Text("Close app?") },
+            text = { Text("This will stop the background auto-connect service and close the app.") },
             confirmButton = {
-                TextButton(onClick = {
-                    showExitConfirm = false
-                    onExitApp()
-                }) {
-                    Text("Close")
-                }
+                TextButton(
+                    onClick = { showExitConfirm = false; onExitApp() },
+                    colors = ButtonDefaults.textButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error
+                    )
+                ) { Text("Stop & Close") }
             },
             dismissButton = {
                 TextButton(onClick = { showExitConfirm = false }) { Text("Cancel") }
@@ -2041,171 +2047,356 @@ fun SettingsDialog(
         )
     }
 
-    fun applyValue(newVal: Int) {
+    fun applyInterval(newVal: Int) {
         val clamped = newVal.coerceIn(AppSettings.MIN_SCAN_INTERVAL, AppSettings.MAX_SCAN_INTERVAL)
         textValue = clamped.toString()
         appSettings.scanIntervalSeconds = clamped
     }
 
-    AlertDialog(
+    // ── Read package info for version display ──
+    val ctx = LocalContext.current
+    val pkgInfo = remember {
+        runCatching {
+            val pm = ctx.packageManager
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                pm.getPackageInfo(ctx.packageName, android.content.pm.PackageManager.PackageInfoFlags.of(0))
+            } else {
+                @Suppress("DEPRECATION")
+                pm.getPackageInfo(ctx.packageName, 0)
+            }
+        }.getOrNull()
+    }
+    val versionName = pkgInfo?.versionName ?: "—"
+    val versionCode = pkgInfo?.let {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P)
+            it.longVersionCode.toString()
+        else
+            @Suppress("DEPRECATION") it.versionCode.toString()
+    } ?: "?"
+
+    // ── Full-screen dialog ──
+    Dialog(
         onDismissRequest = onDismiss,
-        title = { Text("Settings") },
-        text = {
-            LazyColumn(
-                verticalArrangement = Arrangement.spacedBy(16.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                // ── Scan Interval ──
-                item {
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text("Scan interval", style = MaterialTheme.typography.titleMedium)
-                        Text(
-                            "How often the app scans for open Wi-Fi networks (${AppSettings.MIN_SCAN_INTERVAL}–${AppSettings.MAX_SCAN_INTERVAL} s).",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            IconButton(onClick = {
-                                applyValue(
-                                    (textValue.toIntOrNull() ?: settingsState.scanIntervalSeconds) - 1
-                                )
-                            }) {
-                                Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Decrease")
-                            }
-                            OutlinedTextField(
-                                value = textValue,
-                                onValueChange = { input ->
-                                    textValue = input.filter { it.isDigit() }
-                                    input.toIntOrNull()?.let { applyValue(it) }
-                                },
-                                modifier = Modifier.width(80.dp),
-                                textStyle = MaterialTheme.typography.titleMedium.copy(textAlign = TextAlign.Center),
-                                singleLine = true,
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                suffix = { Text("s") }
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxSize(),
+            color = MaterialTheme.colorScheme.background
+        ) {
+            Column(modifier = Modifier.fillMaxSize()) {
+                // ── Top bar ──
+                androidx.compose.material3.TopAppBar(
+                    title = { Text("Settings") },
+                    navigationIcon = {
+                        IconButton(onClick = onDismiss) {
+                            Icon(
+                                imageVector = androidx.compose.material.icons.Icons.Default.KeyboardArrowDown,
+                                contentDescription = "Close settings"
                             )
-                            IconButton(onClick = {
-                                applyValue(
-                                    (textValue.toIntOrNull() ?: settingsState.scanIntervalSeconds) + 1
+                        }
+                    }
+                )
+
+                LazyColumn(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+
+                    // ─────────────────────────────────────────
+                    // SECTION: Scanning
+                    // ─────────────────────────────────────────
+                    item {
+                        SettingsSectionHeader("Scanning")
+                    }
+
+                    item {
+                        SettingsCard {
+                            Column(
+                                modifier = Modifier.padding(16.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(
+                                    "Scan interval",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.SemiBold
                                 )
-                            }) {
-                                Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Increase")
+                                Text(
+                                    "How often the app scans for open Wi-Fi networks.\nRange: ${AppSettings.MIN_SCAN_INTERVAL}–${AppSettings.MAX_SCAN_INTERVAL} seconds.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    modifier = Modifier.padding(top = 4.dp)
+                                ) {
+                                    IconButton(
+                                        onClick = {
+                                            applyInterval(
+                                                (textValue.toIntOrNull() ?: settingsState.scanIntervalSeconds) - 1
+                                            )
+                                        },
+                                        modifier = Modifier
+                                            .size(40.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.KeyboardArrowDown,
+                                            contentDescription = "Decrease interval",
+                                            tint = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
+                                    OutlinedTextField(
+                                        value = textValue,
+                                        onValueChange = { input ->
+                                            val digits = input.filter { it.isDigit() }
+                                            textValue = digits
+                                            digits.toIntOrNull()?.let { applyInterval(it) }
+                                        },
+                                        modifier = Modifier.width(88.dp),
+                                        textStyle = MaterialTheme.typography.titleMedium.copy(
+                                            textAlign = TextAlign.Center
+                                        ),
+                                        singleLine = true,
+                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                        suffix = { Text("s", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                                    )
+                                    IconButton(
+                                        onClick = {
+                                            applyInterval(
+                                                (textValue.toIntOrNull() ?: settingsState.scanIntervalSeconds) + 1
+                                            )
+                                        },
+                                        modifier = Modifier.size(40.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.KeyboardArrowUp,
+                                            contentDescription = "Increase interval",
+                                            tint = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
+                                    // Progress bar showing current interval relative to max
+                                    val fraction = (settingsState.scanIntervalSeconds - AppSettings.MIN_SCAN_INTERVAL)
+                                        .toFloat() / (AppSettings.MAX_SCAN_INTERVAL - AppSettings.MIN_SCAN_INTERVAL)
+                                    LinearProgressIndicator(
+                                        progress = fraction.coerceIn(0f, 1f),
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .height(4.dp)
+                                    )
+                                }
                             }
                         }
                     }
-                }
 
-                // ── Auto-start on boot ──
-                item {
-                    HorizontalDivider()
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text("Auto-start on boot", style = MaterialTheme.typography.titleMedium)
-                        Text(
-                            "Start the auto-connect service automatically when the device boots. The service runs until you close the app.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                if (settingsState.autoStartOnBoot) "Enabled" else "Disabled",
-                                style = MaterialTheme.typography.bodyMedium
-                            )
-                            Switch(
+                    // ─────────────────────────────────────────
+                    // SECTION: Behaviour
+                    // ─────────────────────────────────────────
+                    item {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        SettingsSectionHeader("Behaviour")
+                    }
+
+                    item {
+                        SettingsCard {
+                            SettingsToggleRow(
+                                title = "Auto-start on boot",
+                                description = "Start the auto-connect service automatically when the device boots.",
                                 checked = settingsState.autoStartOnBoot,
                                 onCheckedChange = { appSettings.autoStartOnBoot = it }
                             )
                         }
                     }
-                }
 
-                // ── Developer Logging ──
-                item {
-                    HorizontalDivider()
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text("Developer logging", style = MaterialTheme.typography.titleMedium)
-                        Text(
-                            "Write detailed troubleshooting logs to a file. Logs are kept for 7 days. Enable this if you need to diagnose connection issues.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                if (settingsState.developerLogging) "Enabled" else "Disabled",
-                                style = MaterialTheme.typography.bodyMedium
-                            )
-                            Switch(
+                    // ─────────────────────────────────────────
+                    // SECTION: Developer
+                    // ─────────────────────────────────────────
+                    item {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        SettingsSectionHeader("Developer")
+                    }
+
+                    item {
+                        SettingsCard {
+                            SettingsToggleRow(
+                                title = "Developer logging",
+                                description = "Write detailed troubleshooting logs to a file (kept 7 days). Useful for diagnosing connection issues.",
                                 checked = settingsState.developerLogging,
                                 onCheckedChange = { appSettings.developerLogging = it }
                             )
                         }
                     }
-                }
-                // ── App info (version & last install) ──
-                item {
-                    HorizontalDivider()
-                    // Use LocalContext to read package info for version and last update time
-                    val ctx = LocalContext.current
-                    val pkgInfo = try {
-                        val pm = ctx.packageManager
-                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-                            pm.getPackageInfo(ctx.packageName, android.content.pm.PackageManager.PackageInfoFlags.of(0))
-                        } else {
-                            @Suppress("DEPRECATION")
-                            pm.getPackageInfo(ctx.packageName, 0)
+
+                    // ─────────────────────────────────────────
+                    // SECTION: About
+                    // ─────────────────────────────────────────
+                    item {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        SettingsSectionHeader("About")
+                    }
+
+                    item {
+                        SettingsCard {
+                            Column(
+                                modifier = Modifier.padding(16.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        "Version",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                    Text(
+                                        "$versionName ($versionCode)",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                pkgInfo?.lastUpdateTime?.takeIf { it > 0L }?.let { ts ->
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Text(
+                                            "Last updated",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                        Text(
+                                            java.text.SimpleDateFormat(
+                                                "yyyy-MM-dd HH:mm",
+                                                java.util.Locale.getDefault()
+                                            ).format(java.util.Date(ts)),
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
                         }
-                    } catch (e: Exception) {
-                        null
                     }
 
-                    val versionName = pkgInfo?.versionName ?: "unknown"
-                    val versionCode = pkgInfo?.let {
-                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) it.longVersionCode.toString()
-                        else it.versionCode.toString()
-                    } ?: "?"
-                    val lastUpdate = pkgInfo?.lastUpdateTime ?: 0L
-                    val lastUpdateText = if (lastUpdate > 0L) java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault()).format(java.util.Date(lastUpdate)) else "unknown"
-
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text("App", style = MaterialTheme.typography.titleMedium)
-                        Text("Version: $versionName (code $versionCode)", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text("Last installed/updated: $lastUpdateText", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                }
-
-                item {
-                    HorizontalDivider()
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("Application", style = MaterialTheme.typography.titleMedium)
-                        Text(
-                            "Stop the background service and close the app.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                    // ─────────────────────────────────────────
+                    // SECTION: Danger zone
+                    // ─────────────────────────────────────────
+                    item {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        SettingsSectionHeader(
+                            title = "Danger zone",
+                            titleColor = MaterialTheme.colorScheme.error
                         )
-                        Button(
-                            onClick = { showExitConfirm = true },
-                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                    }
+
+                    item {
+                        SettingsCard(
+                            containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.35f)
                         ) {
-                            Text("Stop Service & Close App")
+                            Column(
+                                modifier = Modifier.padding(16.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(
+                                    "Stop service & close app",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                                Text(
+                                    "Stops the background auto-connect service and exits the app completely.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Button(
+                                    onClick = { showExitConfirm = true },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = MaterialTheme.colorScheme.error
+                                    )
+                                ) {
+                                    Text("Stop Service & Close App")
+                                }
+                            }
                         }
                     }
+
+                    item { Spacer(modifier = Modifier.height(16.dp)) }
                 }
             }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) { Text("OK") }
         }
+    }
+}
+
+// ── Shared Settings UI components ─────────────────────────────────────────────
+
+@Composable
+private fun SettingsSectionHeader(
+    title: String,
+    titleColor: androidx.compose.ui.graphics.Color = MaterialTheme.colorScheme.primary
+) {
+    Text(
+        text = title.uppercase(),
+        style = MaterialTheme.typography.labelMedium,
+        color = titleColor,
+        fontWeight = FontWeight.Bold,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 4.dp, vertical = 2.dp)
     )
+}
+
+@Composable
+private fun SettingsCard(
+    containerColor: androidx.compose.ui.graphics.Color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+    content: @Composable () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = containerColor),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+    ) {
+        content()
+    }
+}
+
+@Composable
+private fun SettingsToggleRow(
+    title: String,
+    description: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onCheckedChange(!checked) }
+            .padding(16.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                title,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                description,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Spacer(modifier = Modifier.width(12.dp))
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange
+        )
+    }
 }
 
 @Preview(showBackground = true)

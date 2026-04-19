@@ -77,7 +77,7 @@ class AutoConnectService : Service() {
             }
         )
         captivePortalRecoveryHandler = CaptivePortalRecoveryHandler(
-            portalSolver = { ssid -> portalSolver.trySolve(ssid) },
+            portalSolver = { ssid, bssid -> portalSolver.trySolve(ssid, bssid) },
             disconnectCurrentNetwork = { connector.disconnectCurrentNetwork() },
             putOnCooldown = { ssid -> NetworkCooldownManager.putOnCooldown(ssid) },
             scanLog = { message -> ScanLogManager.log(message) },
@@ -187,6 +187,7 @@ class AutoConnectService : Service() {
                                 BackgroundAutoConnectState(
                                     isRunning = true,
                                     currentSsid = AutoConnectRuntime.state.value.currentSsid,
+                                    currentBssid = AutoConnectRuntime.state.value.currentBssid,
                                     attempts = attempts,
                                     hasValidatedInternet = true,
                                     message = "Internet is available. Monitoring connection…"

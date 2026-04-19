@@ -25,6 +25,29 @@ interface CaptivePortalSolutionDao {
     @Query("SELECT * FROM captive_portal_solutions WHERE ssid = :ssid ORDER BY createdAt DESC")
     suspend fun getSolutionsForSsid(ssid: String): List<CaptivePortalSolutionEntity>
 
+    @Query("""
+        SELECT * FROM captive_portal_solutions 
+        WHERE ssid = :ssid AND bssid = :bssid AND portalHost = :portalHost 
+        ORDER BY createdAt DESC 
+        LIMIT 1
+    """)
+    suspend fun getLatestSolutionForSsidBssidHost(
+        ssid: String,
+        bssid: String,
+        portalHost: String
+    ): CaptivePortalSolutionEntity?
+
+    @Query("""
+        SELECT * FROM captive_portal_solutions 
+        WHERE ssid = :ssid AND portalHost = :portalHost 
+        ORDER BY createdAt DESC 
+        LIMIT 1
+    """)
+    suspend fun getLatestSolutionForSsidHost(
+        ssid: String,
+        portalHost: String
+    ): CaptivePortalSolutionEntity?
+
     @Query("SELECT * FROM captive_portal_solutions WHERE id = :solutionId")
     suspend fun getSolution(solutionId: Long): CaptivePortalSolutionEntity?
 
@@ -36,6 +59,9 @@ interface CaptivePortalSolutionDao {
 
     @Query("UPDATE captive_portal_solutions SET ssid = :ssid, description = :description, portalUrl = :portalUrl WHERE id = :solutionId")
     suspend fun updateSolutionInfo(solutionId: Long, ssid: String, description: String, portalUrl: String)
+
+    @Query("UPDATE captive_portal_solutions SET bssid = :bssid, portalHost = :portalHost WHERE id = :solutionId")
+    suspend fun updateSolutionBssidAndHost(solutionId: Long, bssid: String?, portalHost: String?)
 
     @Update
     suspend fun updateStep(step: CaptivePortalStepEntity)
@@ -55,4 +81,3 @@ interface CaptivePortalSolutionDao {
         deleteSolution(solutionId)
     }
 }
-

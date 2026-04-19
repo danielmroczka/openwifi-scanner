@@ -1,10 +1,13 @@
 package com.dm.labs.wifi.captive
 
+import android.content.Context
+import android.net.wifi.WifiManager
 import android.webkit.JavascriptInterface
 import com.dm.labs.wifi.data.CaptivePortalSolutionRepository
 import com.dm.labs.wifi.log.ScanLogManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
+import java.net.URL
 
 /**
  * Records user interactions in the captive portal WebView via a JavaScript bridge.
@@ -13,7 +16,8 @@ import kotlinx.coroutines.launch
  */
 class CaptivePortalRecorder(
     private val repository: CaptivePortalSolutionRepository,
-    private val scope: CoroutineScope
+    private val scope: CoroutineScope,
+    private val context: Context? = null
 ) {
     private data class PendingStep(
         val order: Int,
@@ -42,11 +46,23 @@ class CaptivePortalRecorder(
 
         scope.launch {
             try {
+                // Extract BSSID from currently connected WiFi network
+                val bssid = getCurrentBssid()
+                // Extract portal host from URL
+                val portalHost = normalizeHost(portalUrl)
+
                 solutionId = repository.createSolution(
                     ssid = ssid,
                     portalUrl = portalUrl,
                     description = "Recorded on ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault()).format(java.util.Date())}"
                 )
+
+                // Update solution with BSSID and portalHost if we were able to extract them
+                if (bssid != null || portalHost != null) {
+                    repository.updateSolutionBssidAndHost(solutionId, bssid, portalHost)
+                    ScanLogManager.log("Recording for SSID=$ssid, BSSID=$bssid, portalHost=$portalHost")
+                }
+
                 flushPendingSteps()
                 ScanLogManager.log("Started recording captive portal solution for '$ssid'")
             } catch (e: Exception) {
@@ -164,6 +180,34 @@ class CaptivePortalRecorder(
             elementType = step.elementType,
             formData = step.formData
         )
+    }
+
+    /**
+     * Extracts the currently connected WiFi network's BSSID.
+     * Returns null if unable to determine or permissions missing.
+     */
+    private fun getCurrentBssid(): String? {
+        return try {
+            if (context == null) return null
+            val wifiManager = context.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+            wifiManager?.connectionInfo?.bssid
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /**
+     * Normalizes a URL/host to extract the hostname (e.g., "example.com" from "https://example.com/path").
+     */
+    private fun normalizeHost(value: String): String? {
+        return try {
+            val text = value.trim()
+            if (text.isEmpty()) return null
+            val candidate = if (text.contains("://")) text else "https://$text"
+            URL(candidate).host?.lowercase()?.removePrefix("www.")?.ifBlank { null }
+        } catch (_: Exception) {
+            null
+        }
     }
 
     companion object {

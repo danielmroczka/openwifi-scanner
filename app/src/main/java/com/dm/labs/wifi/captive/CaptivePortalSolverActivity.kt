@@ -106,7 +106,7 @@ private fun CaptivePortalSolverScreen(
 
     val db = remember { AppDatabase.getDatabase(context) }
     val solutionRepo = remember { RoomCaptivePortalSolutionRepository(db.captivePortalSolutionDao()) }
-    val recorder = remember { CaptivePortalRecorder(solutionRepo, scope) }
+    val recorder = remember { CaptivePortalRecorder(solutionRepo, scope, context) }
 
     var isRecording by remember { mutableStateOf(false) }
     val isReplayMode = replaySolutionId > 0

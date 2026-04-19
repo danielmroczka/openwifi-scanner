@@ -92,11 +92,28 @@ class CaptivePortalRecorderTest {
             portalHost: String
         ): CaptivePortalSolutionEntity? = null
 
+        override suspend fun getLatestSolutionForSsidBssidHost(
+            ssid: String,
+            bssid: String,
+            portalHost: String
+        ): CaptivePortalSolutionEntity? = null
+
+        override suspend fun getLatestSolutionForSsidHost(
+            ssid: String,
+            portalHost: String
+        ): CaptivePortalSolutionEntity? = null
+
         override suspend fun getSolutionWithSteps(solutionId: Long): SolutionWithSteps? = null
 
         override suspend fun deleteSolution(solutionId: Long) = Unit
 
         override suspend fun updateSolutionInfo(solutionId: Long, ssid: String, description: String, portalUrl: String) = Unit
+
+        override suspend fun updateSolutionBssidAndHost(
+            solutionId: Long,
+            bssid: String?,
+            portalHost: String?
+        ) = Unit
 
         override suspend fun updateStep(step: CaptivePortalStepEntity) = Unit
 

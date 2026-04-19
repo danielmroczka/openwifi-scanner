@@ -14,13 +14,13 @@ class CaptivePortalRecoveryHandlerTest {
     @Test
     fun `recover calls solver for detected captive portal and marks connected when solved`() = runTest {
         val pushedStates = mutableListOf<BackgroundAutoConnectState>()
-        val solverSsids = mutableListOf<String?>()
+        val solverCalls = mutableListOf<Pair<String?, String?>>()
         var disconnectCalls = 0
         val cooldownSsids = mutableListOf<String>()
 
         val handler = CaptivePortalRecoveryHandler(
-            portalSolver = { ssid ->
-                solverSsids += ssid
+            portalSolver = { ssid, bssid ->
+                solverCalls += (ssid to bssid)
                 true
             },
             disconnectCurrentNetwork = { disconnectCalls++ },
@@ -40,7 +40,7 @@ class CaptivePortalRecoveryHandlerTest {
 
         val result = handler.recover(initial, attempts = 4, pushState = { pushedStates += it })
 
-        assertEquals(listOf("CafeOpen"), solverSsids)
+        assertEquals(listOf("CafeOpen" to null), solverCalls)
         assertTrue(result.hasValidatedInternet)
         assertFalse(result.captivePortalDetected)
         assertEquals("CafeOpen", result.currentSsid)
@@ -55,7 +55,7 @@ class CaptivePortalRecoveryHandlerTest {
         val cooldownSsids = mutableListOf<String>()
 
         val handler = CaptivePortalRecoveryHandler(
-            portalSolver = { false },
+            portalSolver = { _, _ -> false },
             disconnectCurrentNetwork = { disconnectCalls++ },
             putOnCooldown = { cooldownSsids += it },
             scanLog = {},
@@ -86,7 +86,7 @@ class CaptivePortalRecoveryHandlerTest {
         val cooldownSsids = mutableListOf<String>()
 
         val handler = CaptivePortalRecoveryHandler(
-            portalSolver = { false },
+            portalSolver = { _, _ -> false },
             disconnectCurrentNetwork = { disconnectCalls++ },
             putOnCooldown = { cooldownSsids += it },
             scanLog = {},

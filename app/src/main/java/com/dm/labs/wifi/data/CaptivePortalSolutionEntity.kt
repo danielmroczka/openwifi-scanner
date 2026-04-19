@@ -10,6 +10,9 @@ data class CaptivePortalSolutionEntity(
     val portalUrl: String,
     val description: String = "",
     val createdAt: Long = System.currentTimeMillis(),
-    val stepCount: Int = 0
+    val stepCount: Int = 0,
+    val bssid: String? = null,           // AP identifier (BSSID) where solution was recorded
+    val portalHost: String? = null,     // Extracted host from portalUrl for precise matching
+    val isShared: Boolean = false       // For future peer-to-peer sharing
 )
 

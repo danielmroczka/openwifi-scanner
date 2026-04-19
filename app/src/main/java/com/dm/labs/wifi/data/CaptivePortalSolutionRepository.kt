@@ -27,9 +27,12 @@ interface CaptivePortalSolutionRepository {
     suspend fun getSolutionsForSsid(ssid: String): List<CaptivePortalSolutionEntity>
     suspend fun getLatestSolutionForSsid(ssid: String): CaptivePortalSolutionEntity?
     suspend fun getLatestSolutionForSsidAndHost(ssid: String, portalHost: String): CaptivePortalSolutionEntity?
+    suspend fun getLatestSolutionForSsidBssidHost(ssid: String, bssid: String, portalHost: String): CaptivePortalSolutionEntity?
+    suspend fun getLatestSolutionForSsidHost(ssid: String, portalHost: String): CaptivePortalSolutionEntity?
     suspend fun getSolutionWithSteps(solutionId: Long): SolutionWithSteps?
     suspend fun deleteSolution(solutionId: Long)
     suspend fun updateSolutionInfo(solutionId: Long, ssid: String, description: String, portalUrl: String)
+    suspend fun updateSolutionBssidAndHost(solutionId: Long, bssid: String?, portalHost: String?)
     suspend fun updateStep(step: CaptivePortalStepEntity)
     suspend fun deleteStep(solutionId: Long, stepId: Long)
     suspend fun exportToJson(solutionId: Long): String?
@@ -106,6 +109,23 @@ class RoomCaptivePortalSolutionRepository(
         }
     }
 
+    override suspend fun getLatestSolutionForSsidBssidHost(
+        ssid: String,
+        bssid: String,
+        portalHost: String
+    ): CaptivePortalSolutionEntity? {
+        val normalizedHost = normalizeHost(portalHost) ?: return null
+        return dao.getLatestSolutionForSsidBssidHost(ssid, bssid, normalizedHost)
+    }
+
+    override suspend fun getLatestSolutionForSsidHost(
+        ssid: String,
+        portalHost: String
+    ): CaptivePortalSolutionEntity? {
+        val normalizedHost = normalizeHost(portalHost) ?: return null
+        return dao.getLatestSolutionForSsidHost(ssid, normalizedHost)
+    }
+
     override suspend fun getSolutionWithSteps(solutionId: Long): SolutionWithSteps? {
         val solution = dao.getSolution(solutionId) ?: return null
         val steps = dao.getStepsForSolution(solutionId)
@@ -118,6 +138,10 @@ class RoomCaptivePortalSolutionRepository(
 
     override suspend fun updateSolutionInfo(solutionId: Long, ssid: String, description: String, portalUrl: String) {
         dao.updateSolutionInfo(solutionId, ssid, description, portalUrl)
+    }
+
+    override suspend fun updateSolutionBssidAndHost(solutionId: Long, bssid: String?, portalHost: String?) {
+        dao.updateSolutionBssidAndHost(solutionId, bssid, portalHost)
     }
 
     override suspend fun updateStep(step: CaptivePortalStepEntity) {
@@ -240,4 +264,3 @@ class RoomCaptivePortalSolutionRepository(
         }.getOrNull()
     }
 }
-

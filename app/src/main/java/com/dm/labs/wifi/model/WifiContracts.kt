@@ -38,6 +38,7 @@ interface CaptivePortalChecker {
 data class BackgroundAutoConnectState(
     val isRunning: Boolean = false,
     val currentSsid: String? = null,
+    val currentBssid: String? = null,  // BSSID of currently connected network
     val attempts: Int = 0,
     val captivePortalDetected: Boolean = false,
     val hasValidatedInternet: Boolean = false,

@@ -180,6 +180,23 @@ class CaptivePortalAutoSolverTest {
             }
         }
 
+        override suspend fun getLatestSolutionForSsidBssidHost(
+            ssid: String,
+            bssid: String,
+            portalHost: String
+        ): CaptivePortalSolutionEntity? {
+            return if (hostMatchedSolution?.ssid == ssid && portalHost.contains("cafe-portal")) {
+                hostMatchedSolution
+            } else {
+                null
+            }
+        }
+
+        override suspend fun getLatestSolutionForSsidHost(
+            ssid: String,
+            portalHost: String
+        ): CaptivePortalSolutionEntity? = getLatestSolutionForSsidAndHost(ssid, portalHost)
+
         override suspend fun getSolutionWithSteps(solutionId: Long): SolutionWithSteps? = null
 
         override suspend fun deleteSolution(solutionId: Long) = Unit
@@ -189,6 +206,12 @@ class CaptivePortalAutoSolverTest {
             ssid: String,
             description: String,
             portalUrl: String
+        ) = Unit
+
+        override suspend fun updateSolutionBssidAndHost(
+            solutionId: Long,
+            bssid: String?,
+            portalHost: String?
         ) = Unit
 
         override suspend fun updateStep(step: CaptivePortalStepEntity) = Unit

@@ -27,16 +27,26 @@ class CaptivePortalAutoSolver(
     private val httpSolver: (suspend () -> Boolean)? = null,
     private val resolutionWaiter: (suspend (Long) -> Boolean)? = null
 ) {
-    suspend fun trySolve(ssid: String?): Boolean {
+    suspend fun trySolve(ssid: String?, bssid: String? = null): Boolean {
         val knownSsid = ssid?.takeIf { it.isNotBlank() }
-        if (knownSsid != null && solutionRepository != null) {
+        val repository = solutionRepository
+        if (knownSsid != null && repository != null) {
             val portalHost = portalHostDetector?.invoke() ?: detectPortalHostFromRedirect()
-            val solution = if (portalHost != null) {
-                solutionRepository.getLatestSolutionForSsidAndHost(knownSsid, portalHost)
-                    ?: solutionRepository.getLatestSolutionForSsid(knownSsid)
+            val solution = if (portalHost != null && bssid != null) {
+                // Priority 1: Try SSID + BSSID + portalHost (most specific)
+                repository.getLatestSolutionForSsidBssidHost(knownSsid, bssid, portalHost)
+                    ?: run {
+                        // Priority 2: Try SSID + portalHost (without BSSID)
+                        repository.getLatestSolutionForSsidHost(knownSsid, portalHost)
+                    }
+            } else if (portalHost != null) {
+                // Priority 2: Try SSID + portalHost
+                repository.getLatestSolutionForSsidHost(knownSsid, portalHost)
             } else {
-                solutionRepository.getLatestSolutionForSsid(knownSsid)
+                // Priority 3: Fallback to SSID only
+                repository.getLatestSolutionForSsid(knownSsid)
             }
+
             if (solution != null) {
                 ScanLogManager.log("Found saved portal steps for $knownSsid. Trying replay…")
                 replayLauncher(knownSsid, solution.id)
@@ -225,4 +235,3 @@ class CaptivePortalAutoSolver(
         private val VALUE_RE = Regex("""value=["']([^"']*)["']""")
     }
 }
-

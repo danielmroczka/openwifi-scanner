@@ -79,7 +79,15 @@ class AutoConnectCoordinator(
                         true
                     }
                 }
-            filtered.sortedByDescending { it.bssid in whitelistedBssids }
+            // Multi-level sort:
+            // 1. Priority: whitelisted first (false = whitelisted), then neutral
+            // 2. Signal strength: higher dBm = better (so negate for descending sort)
+            filtered.sortedWith(
+                compareBy(
+                    { it.bssid !in whitelistedBssids },  // false (whitelisted) before true (neutral)
+                    { -it.level }                         // stronger signal first (higher = better)
+                )
+            )
         } else {
             whitelistedBssids = emptySet()
             allNetworks.filter {
@@ -131,6 +139,7 @@ class AutoConnectCoordinator(
                     BackgroundAutoConnectState(
                         isRunning = true,
                         currentSsid = network.ssid,
+                        currentBssid = network.bssid,
                         attempts = attempts,
                         message = "Waiting for approval: ${network.ssid}…"
                     )
@@ -161,6 +170,7 @@ class AutoConnectCoordinator(
                 BackgroundAutoConnectState(
                     isRunning = true,
                     currentSsid = network.ssid,
+                    currentBssid = network.bssid,
                     attempts = attempts,
                     message = "Trying ${network.ssid}…"
                 )
@@ -178,6 +188,7 @@ class AutoConnectCoordinator(
                         return BackgroundAutoConnectState(
                             isRunning = true,
                             currentSsid = network.ssid,
+                            currentBssid = network.bssid,
                             attempts = attempts,
                             hasValidatedInternet = true,
                             message = "Connected to ${network.ssid} with internet."
@@ -193,6 +204,7 @@ class AutoConnectCoordinator(
                         return BackgroundAutoConnectState(
                             isRunning = true,
                             currentSsid = network.ssid,
+                            currentBssid = network.bssid,
                             attempts = attempts,
                             captivePortalDetected = true,
                             message = "Captive portal detected on ${network.ssid}."
@@ -216,6 +228,7 @@ class AutoConnectCoordinator(
                         BackgroundAutoConnectState(
                             isRunning = true,
                             currentSsid = network.ssid,
+                            currentBssid = network.bssid,
                             attempts = attempts,
                             message = "${network.ssid} failed: ${connect.reason}"
                         )

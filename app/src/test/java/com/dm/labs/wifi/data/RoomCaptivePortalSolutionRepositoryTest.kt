@@ -198,6 +198,21 @@ class RoomCaptivePortalSolutionRepositoryTest {
         override suspend fun getSolutionsForSsid(ssid: String): List<CaptivePortalSolutionEntity> =
             solutions.values.filter { it.ssid == ssid }.sortedByDescending { it.createdAt }
 
+        override suspend fun getLatestSolutionForSsidBssidHost(
+            ssid: String,
+            bssid: String,
+            portalHost: String
+        ): CaptivePortalSolutionEntity? = solutions.values
+            .filter { it.ssid == ssid && it.bssid == bssid && it.portalHost == portalHost }
+            .maxByOrNull { it.createdAt }
+
+        override suspend fun getLatestSolutionForSsidHost(
+            ssid: String,
+            portalHost: String
+        ): CaptivePortalSolutionEntity? = solutions.values
+            .filter { it.ssid == ssid && it.portalHost == portalHost }
+            .maxByOrNull { it.createdAt }
+
         override suspend fun getSolution(solutionId: Long): CaptivePortalSolutionEntity? = solutions[solutionId]
 
         override suspend fun getStepsForSolution(solutionId: Long): List<CaptivePortalStepEntity> =
@@ -211,6 +226,11 @@ class RoomCaptivePortalSolutionRepositoryTest {
         override suspend fun updateSolutionInfo(solutionId: Long, ssid: String, description: String, portalUrl: String) {
             val current = solutions[solutionId] ?: return
             solutions[solutionId] = current.copy(ssid = ssid, description = description, portalUrl = portalUrl)
+        }
+
+        override suspend fun updateSolutionBssidAndHost(solutionId: Long, bssid: String?, portalHost: String?) {
+            val current = solutions[solutionId] ?: return
+            solutions[solutionId] = current.copy(bssid = bssid, portalHost = portalHost)
         }
 
         override suspend fun updateStep(step: CaptivePortalStepEntity) {

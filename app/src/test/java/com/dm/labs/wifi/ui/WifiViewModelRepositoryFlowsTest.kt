@@ -351,6 +351,17 @@ class WifiViewModelRepositoryFlowsTest {
         override suspend fun getLatestSolutionForSsidAndHost(ssid: String, portalHost: String): CaptivePortalSolutionEntity? =
             getSolutionsForSsid(ssid).firstOrNull()
 
+        override suspend fun getLatestSolutionForSsidBssidHost(
+            ssid: String,
+            bssid: String,
+            portalHost: String
+        ): CaptivePortalSolutionEntity? = getSolutionsForSsid(ssid).firstOrNull()
+
+        override suspend fun getLatestSolutionForSsidHost(
+            ssid: String,
+            portalHost: String
+        ): CaptivePortalSolutionEntity? = getSolutionsForSsid(ssid).firstOrNull()
+
         override suspend fun getSolutionWithSteps(solutionId: Long): SolutionWithSteps? = details[solutionId]
 
         override suspend fun deleteSolution(solutionId: Long) {
@@ -361,6 +372,13 @@ class WifiViewModelRepositoryFlowsTest {
             val detail = details[solutionId] ?: return
             details[solutionId] = detail.copy(
                 solution = detail.solution.copy(ssid = ssid, description = description, portalUrl = portalUrl)
+            )
+        }
+
+        override suspend fun updateSolutionBssidAndHost(solutionId: Long, bssid: String?, portalHost: String?) {
+            val detail = details[solutionId] ?: return
+            details[solutionId] = detail.copy(
+                solution = detail.solution.copy(bssid = bssid, portalHost = portalHost)
             )
         }
 

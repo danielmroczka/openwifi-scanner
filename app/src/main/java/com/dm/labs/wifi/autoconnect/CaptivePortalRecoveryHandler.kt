@@ -3,7 +3,7 @@ package com.dm.labs.wifi.autoconnect
 import com.dm.labs.wifi.model.BackgroundAutoConnectState
 
 internal class CaptivePortalRecoveryHandler(
-    private val portalSolver: suspend (String?) -> Boolean,
+    private val portalSolver: suspend (String?, String?) -> Boolean,
     private val disconnectCurrentNetwork: () -> Unit,
     private val putOnCooldown: (String) -> Unit,
     private val scanLog: (String) -> Unit,
@@ -18,7 +18,7 @@ internal class CaptivePortalRecoveryHandler(
         pushState(state.copy(message = "Solving captive portal on ${state.currentSsid}..."))
         devInfo("Attempting captive portal solve on ${state.currentSsid}...")
 
-        val solved = portalSolver(state.currentSsid)
+        val solved = portalSolver(state.currentSsid, state.currentBssid)
         if (solved) {
             scanLog("Captive portal solved on ${state.currentSsid}.")
             devInfo("Captive portal solved successfully on ${state.currentSsid}")

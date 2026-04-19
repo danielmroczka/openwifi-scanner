@@ -8,6 +8,8 @@ import android.app.Service
 import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
@@ -50,6 +52,7 @@ class AutoConnectService : Service() {
     private lateinit var portalSolver: CaptivePortalAutoSolver
     private lateinit var captivePortalRecoveryHandler: CaptivePortalRecoveryHandler
     private lateinit var appSettings: AppSettings
+    private lateinit var connectivityManager: ConnectivityManager
     private val approvalNotificationId = NOTIFICATION_ID + 1
     private val captivePortalNotificationId = NOTIFICATION_ID + 2
 
@@ -57,6 +60,8 @@ class AutoConnectService : Service() {
         super.onCreate()
 
         DevLog.init(applicationContext)
+
+        connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
 
         val scanner = AndroidWifiScanner(applicationContext)
         connector = AndroidWifiConnector(applicationContext)
@@ -371,13 +376,13 @@ class AutoConnectService : Service() {
             processInfo.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_VISIBLE
     }
 
-    private fun buildCapabilityString(caps: android.net.NetworkCapabilities): String {
+    private fun buildCapabilityString(caps: NetworkCapabilities): String {
         return buildString {
             append("(")
-            if (caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED)) append("VALIDATED ")
-            if (caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL)) append("CAPTIVE_PORTAL ")
-            if (caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)) append("INTERNET ")
-            if (caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED)) append("NOT_RESTRICTED ")
+            if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) append("VALIDATED ")
+            if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL)) append("CAPTIVE_PORTAL ")
+            if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) append("INTERNET ")
+            if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED)) append("NOT_RESTRICTED ")
             append(")")
         }
     }

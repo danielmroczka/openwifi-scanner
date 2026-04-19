@@ -116,7 +116,7 @@ class CaptivePortalAutoSolver(
     private suspend fun trySolveViaHttp(): Boolean = withContext(Dispatchers.IO) {
         try {
             // Step 1: check connectivity, follow redirect to find portal URL
-            val portalUrl: String?
+            var portalUrl: String? = null
             var lastException: Exception? = null
 
             // Retry connectivity check up to 3 times (network might be temporarily unavailable)

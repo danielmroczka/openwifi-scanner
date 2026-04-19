@@ -41,17 +41,20 @@ class AutoConnectCoordinator(
             )
         )
 
+        DevLog.i("🔍 Scanning for open WiFi networks…")
         val scan = scanner.scanOpenNetworks()
         val allNetworks = scan.getOrElse {
             val errorMsg = "Scan failed: ${it.message ?: "unknown error"}"
             ScanLogManager.log(errorMsg)
-            DevLog.e("Scan failed", it)
+            DevLog.e("❌ Scan failed", it)
             return BackgroundAutoConnectState(
                 isRunning = true,
                 attempts = previousAttempts,
                 message = errorMsg
             )
         }
+
+        DevLog.i("   → Scan complete: found ${allNetworks.size} open network(s)")
 
         if (allNetworks.isEmpty()) {
             return BackgroundAutoConnectState(
@@ -164,7 +167,7 @@ class AutoConnectCoordinator(
 
             // --- Connect ---
             attempts += 1
-            DevLog.i("Attempting connection to ${describeNetwork(network)}")
+            DevLog.i("📌 Attempt #$attempts: Trying to connect to ${describeNetwork(network)}…")
 
             onUpdate(
                 BackgroundAutoConnectState(
@@ -180,11 +183,13 @@ class AutoConnectCoordinator(
 
             when (val connect = connector.connectToOpenNetwork(network.ssid)) {
                 ConnectAttemptResult.Connected -> {
-                    DevLog.i("Wi-Fi associated with ${describeNetwork(network)}; validating internet capability")
+                    DevLog.i("📡 Wi-Fi ASSOCIATED with ${describeNetwork(network)}")
+                    DevLog.i("   → Now validating internet capability (checking if network has connectivity)…")
+                    ScanLogManager.log("Connected to ${network.ssid}, validating internet…")
                     val validated = waitForValidatedInternet(stopSignal)
                     if (validated) {
                         ScanLogManager.log("Connected to ${network.ssid} with validated internet")
-                        DevLog.i("Internet validated on ${describeNetwork(network)}")
+                        DevLog.i("   ✓ Internet VALIDATED - connection successful!")
                         return BackgroundAutoConnectState(
                             isRunning = true,
                             currentSsid = network.ssid,
@@ -195,12 +200,13 @@ class AutoConnectCoordinator(
                         )
                     }
 
+                    DevLog.i("   ⚠ Internet validation FAILED - checking for captive portal…")
                     val portalStatus = captivePortalChecker.getStatus()
-                    DevLog.i("Post-connect status for ${describeNetwork(network)}: $portalStatus")
+                    DevLog.i("   → Portal status: $portalStatus")
 
                     if (portalStatus == CaptivePortalStatus.CAPTIVE_PORTAL) {
                         ScanLogManager.log("Captive portal detected on ${network.ssid}.")
-                        DevLog.i("Captive portal detected on ${describeNetwork(network)}; starting recovery flow")
+                        DevLog.i("   🔐 CAPTIVE PORTAL DETECTED - starting recovery flow")
                         return BackgroundAutoConnectState(
                             isRunning = true,
                             currentSsid = network.ssid,
@@ -255,14 +261,40 @@ class AutoConnectCoordinator(
     }
 
     private suspend fun waitForValidatedInternet(stopSignal: () -> Boolean): Boolean {
-        repeat(3) {
-            if (stopSignal()) return false
-            when (captivePortalChecker.getStatus()) {
-                CaptivePortalStatus.OPEN_INTERNET -> return true
-                CaptivePortalStatus.CAPTIVE_PORTAL -> return false
-                CaptivePortalStatus.UNKNOWN -> delay(2_000)
+        // Wait up to 6 seconds (3 checks × 2 seconds) for internet validation
+        // This allows time for the OS to perform its connectivity checks
+        DevLog.i("↳ Starting internet validation check (waiting up to 6 seconds)…")
+
+        repeat(3) { iteration ->
+            if (stopSignal()) {
+                DevLog.w("↳ Validation stopped by signal")
+                return false
+            }
+
+            val status = captivePortalChecker.getStatus()
+            DevLog.d("↳ Validation check #${iteration + 1}/3: status=$status")
+
+            when (status) {
+                CaptivePortalStatus.OPEN_INTERNET -> {
+                    DevLog.i("↳ ✓ Internet VALIDATED successfully on attempt ${iteration + 1}")
+                    return true
+                }
+                CaptivePortalStatus.CAPTIVE_PORTAL -> {
+                    DevLog.w("↳ ✗ CAPTIVE PORTAL detected during validation on attempt ${iteration + 1}")
+                    return false
+                }
+                CaptivePortalStatus.UNKNOWN -> {
+                    if (iteration < 2) {
+                        DevLog.d("↳ Status is UNKNOWN on attempt ${iteration + 1} - waiting 2 seconds for OS validation…")
+                        delay(2_000)
+                    } else {
+                        DevLog.w("↳ Final check (attempt 3/3): status still UNKNOWN - connection not validated")
+                    }
+                }
             }
         }
+
+        DevLog.w("↳ ✗ Internet validation FAILED - status remained UNKNOWN after 3 checks")
         return false
     }
 

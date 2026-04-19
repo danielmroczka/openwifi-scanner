@@ -322,6 +322,7 @@ class MainActivity : ComponentActivity() {
 
                             1 -> NetworksScreen(
                                 whitelistedNetworks = state.whitelistedNetworks,
+                                whitelistedNetworkGroups = state.whitelistedNetworkGroups,
                                 blacklistedNetworks = state.blacklistedNetworks,
                                 onDeleteNetwork = vm::deleteNetworkPermanent,
                                 onBlockNetwork = vm::blockNetwork,
@@ -669,6 +670,7 @@ fun WifiScreen(
 @Composable
 fun NetworksScreen(
     whitelistedNetworks: List<WifiNetworkEntity>,
+    whitelistedNetworkGroups: Map<String, List<WifiNetworkEntity>>,
     blacklistedNetworks: List<WifiNetworkEntity>,
     onDeleteNetwork: (WifiNetworkEntity) -> Unit,
     onBlockNetwork: (WifiNetworkEntity) -> Unit,
@@ -731,9 +733,9 @@ fun NetworksScreen(
         }
 
         if (showWhitelist) {
-            NetworkListContent(
+            GroupedFavouriteNetworkListContent(
                 emptyMessage = "No favourite networks yet.\nFavourite a network from the Scanner tab.",
-                networks = whitelistedNetworks,
+                groupedNetworks = whitelistedNetworkGroups,
                 onTap = onOpenDetail,
                 modifier = Modifier.weight(1f)
             )
@@ -744,6 +746,48 @@ fun NetworksScreen(
                 onTap = onOpenDetail,
                 modifier = Modifier.weight(1f)
             )
+        }
+    }
+}
+
+@Composable
+private fun GroupedFavouriteNetworkListContent(
+    emptyMessage: String,
+    groupedNetworks: Map<String, List<WifiNetworkEntity>>,
+    onTap: (WifiNetworkEntity) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val dateFormat = remember {
+        java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault())
+    }
+
+    if (groupedNetworks.isEmpty()) {
+        Text(
+            text = emptyMessage,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 24.dp)
+        )
+    }
+
+    LazyColumn(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        groupedNetworks.forEach { (locationLabel, networks) ->
+            item(key = "header_$locationLabel") {
+                Text(
+                    text = locationLabel,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(top = 8.dp)
+                )
+            }
+
+            items(networks, key = { it.bssid }) { network ->
+                NetworkRowCard(network = network, dateFormat = dateFormat, onTap = onTap)
+            }
         }
     }
 }
@@ -773,44 +817,53 @@ private fun NetworkListContent(
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         items(networks, key = { it.bssid }) { network ->
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { onTap(network) },
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant
-                )
+            NetworkRowCard(network = network, dateFormat = dateFormat, onTap = onTap)
+        }
+    }
+}
+
+@Composable
+private fun NetworkRowCard(
+    network: WifiNetworkEntity,
+    dateFormat: java.text.SimpleDateFormat,
+    onTap: (WifiNetworkEntity) -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onTap(network) },
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant
+        )
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Column(modifier = Modifier.padding(12.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = network.ssid,
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.weight(1f)
-                        )
-                        Text(
-                            text = "→",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    }
-                    Text(
-                        text = "BSSID: ${network.bssid}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        text = dateFormat.format(java.util.Date(network.lastConnected)),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
+                Text(
+                    text = network.ssid,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    text = "→",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.primary
+                )
             }
+            Text(
+                text = "BSSID: ${network.bssid}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                text = dateFormat.format(java.util.Date(network.lastConnected)),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }

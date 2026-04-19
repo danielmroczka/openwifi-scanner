@@ -1,6 +1,7 @@
 package com.dm.labs.wifi.ui
 
 import android.content.Context
+import android.location.Geocoder
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -33,6 +34,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.util.Locale
 
 data class WifiUiState(
     val isScanning: Boolean = false,
@@ -50,6 +52,7 @@ data class WifiUiState(
     val whitelistedBssids: Set<String> = emptySet(),
     val blacklistedNetworks: List<WifiNetworkEntity> = emptyList(),
     val whitelistedNetworks: List<WifiNetworkEntity> = emptyList(),
+    val whitelistedNetworkGroups: Map<String, List<WifiNetworkEntity>> = emptyMap(),
     val pendingApproval: PendingNetworkApproval? = null,
     val solutions: List<CaptivePortalSolutionEntity> = emptyList(),
     val selectedSolutionDetail: SolutionWithSteps? = null,
@@ -309,16 +312,53 @@ class WifiViewModel(
             val repo = repository ?: return@launch
             val blacklisted = repo.getBlacklistedNetworks()
             val whitelisted = repo.getWhitelistedNetworks()
+            val whitelistedGroups = buildWhitelistedLocationGroups(whitelisted)
             _uiState.update {
                 it.copy(
                     blacklistedBssids = blacklisted.map { n -> n.bssid }.toSet(),
                     whitelistedBssids = whitelisted.map { n -> n.bssid }.toSet(),
                     blacklistedNetworks = blacklisted,
-                    whitelistedNetworks = whitelisted
+                    whitelistedNetworks = whitelisted,
+                    whitelistedNetworkGroups = whitelistedGroups
                 )
             }
         }
         refreshSolutions()
+    }
+
+    private suspend fun buildWhitelistedLocationGroups(
+        whitelisted: List<WifiNetworkEntity>
+    ): Map<String, List<WifiNetworkEntity>> {
+        if (whitelisted.isEmpty()) return emptyMap()
+        return whitelisted
+            .groupBy { resolveFavouriteLocationLabel(it) }
+            .toSortedMap()
+            .mapValues { (_, networks) ->
+                networks.sortedByDescending { it.lastConnected }
+            }
+    }
+
+    private suspend fun resolveFavouriteLocationLabel(network: WifiNetworkEntity): String {
+        val lat = network.latitude ?: return LOCATION_UNKNOWN_LABEL
+        val lon = network.longitude ?: return LOCATION_UNKNOWN_LABEL
+        val context = appContext ?: return LOCATION_UNKNOWN_LABEL
+        if (!Geocoder.isPresent()) return LOCATION_UNKNOWN_LABEL
+
+        return runCatching {
+            val geocoder = Geocoder(context, Locale.getDefault())
+            @Suppress("DEPRECATION")
+            val address = geocoder.getFromLocation(lat, lon, 1)?.firstOrNull()
+            val city = address?.locality?.trim().orEmpty()
+            val region = address?.adminArea?.trim().orEmpty()
+            val countryCode = address?.countryCode?.trim().orEmpty()
+            when {
+                city.isNotEmpty() && region.isNotEmpty() && countryCode.isNotEmpty() -> "$city, $region, $countryCode"
+                city.isNotEmpty() && countryCode.isNotEmpty() -> "$city, $countryCode"
+                region.isNotEmpty() && countryCode.isNotEmpty() -> "$region, $countryCode"
+                countryCode.isNotEmpty() -> countryCode
+                else -> LOCATION_UNKNOWN_LABEL
+            }
+        }.getOrElse { LOCATION_UNKNOWN_LABEL }
     }
 
     fun refreshSolutions() {
@@ -396,6 +436,8 @@ class WifiViewModel(
         return count
     }
 }
+
+private const val LOCATION_UNKNOWN_LABEL = "Location unknown"
 
 class WifiViewModelFactory(
     private val scanner: WifiScanner,

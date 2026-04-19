@@ -79,18 +79,32 @@ class CaptivePortalAutoSolver(
     @Suppress("TooGenericExceptionCaught")
     private suspend fun detectPortalHostFromRedirect(): String? = withContext(Dispatchers.IO) {
         try {
-            val conn = URL(CONNECTIVITY_CHECK).openConnection() as HttpURLConnection
-            try {
-                conn.instanceFollowRedirects = false
-                conn.connectTimeout = 3_000
-                conn.readTimeout = 3_000
-                conn.setRequestProperty("User-Agent", UA)
-                val code = conn.responseCode
-                val location = if (code in 300..399) conn.getHeaderField("Location") else null
-                location?.let { URL(it).host?.lowercase()?.ifBlank { null } }
-            } finally {
-                conn.disconnect()
+            var lastException: Exception? = null
+
+            // Retry up to 2 times for robustness
+            for (attempt in 1..2) {
+                try {
+                    val conn = URL(CONNECTIVITY_CHECK).openConnection() as HttpURLConnection
+                    try {
+                        conn.instanceFollowRedirects = false
+                        conn.connectTimeout = 3_000
+                        conn.readTimeout = 3_000
+                        conn.setRequestProperty("User-Agent", UA)
+                        val code = conn.responseCode
+                        val location = if (code in 300..399) conn.getHeaderField("Location") else null
+                        return@withContext location?.let { URL(it).host?.lowercase()?.ifBlank { null } }
+                    } finally {
+                        conn.disconnect()
+                    }
+                } catch (e: Exception) {
+                    lastException = e
+                    if (attempt < 2) {
+                        delay(500)
+                    }
+                }
             }
+
+            null
         } catch (_: Exception) {
             null
         }
@@ -103,17 +117,35 @@ class CaptivePortalAutoSolver(
         try {
             // Step 1: check connectivity, follow redirect to find portal URL
             val portalUrl: String?
-            val checkConn = URL(CONNECTIVITY_CHECK).openConnection() as HttpURLConnection
-            try {
-                checkConn.instanceFollowRedirects = false
-                checkConn.connectTimeout = 10_000
-                checkConn.readTimeout = 10_000
-                checkConn.setRequestProperty("User-Agent", UA)
-                val code = checkConn.responseCode
-                if (code == 204) return@withContext true
-                portalUrl = if (code in 300..399) checkConn.getHeaderField("Location") else null
-            } finally {
-                checkConn.disconnect()
+            var lastException: Exception? = null
+
+            // Retry connectivity check up to 3 times (network might be temporarily unavailable)
+            var checkConn: HttpURLConnection? = null
+            for (attempt in 1..3) {
+                try {
+                    checkConn = URL(CONNECTIVITY_CHECK).openConnection() as HttpURLConnection
+                    checkConn.instanceFollowRedirects = false
+                    checkConn.connectTimeout = 10_000
+                    checkConn.readTimeout = 10_000
+                    checkConn.setRequestProperty("User-Agent", UA)
+                    val code = checkConn.responseCode
+                    if (code == 204) return@withContext true
+                    portalUrl = if (code in 300..399) checkConn.getHeaderField("Location") else null
+                    checkConn.disconnect()
+                    break  // Success, exit retry loop
+                } catch (e: Exception) {
+                    lastException = e
+                    checkConn?.disconnect()
+                    if (attempt < 3) {
+                        delay(1_000)  // Wait before retry
+                    }
+                }
+            }
+
+            if (lastException != null && portalUrl == null) {
+                // All retries failed
+                ScanLogManager.log("HTTP portal solve error: connectivity check failed after 3 attempts: ${lastException.message}")
+                return@withContext false
             }
 
             if (portalUrl.isNullOrBlank()) return@withContext false

@@ -92,6 +92,22 @@ class WifiViewModelRepositoryFlowsTest {
     }
 
     @Test
+    fun `refreshLists groups favourites with fallback label when location context is unavailable`() = runTest(dispatcher) {
+        val wifiRepository = FakeWifiNetworkRepository().apply {
+            setWhitelisted("fav-1", "Cafe", true, latitude = 50.06143, longitude = 19.93658)
+            setWhitelisted("fav-2", "Library", true, latitude = 52.22977, longitude = 21.01178)
+        }
+        val viewModel = createViewModel(repository = wifiRepository)
+
+        viewModel.refreshLists()
+        advanceUntilIdle()
+
+        val groups = viewModel.uiState.value.whitelistedNetworkGroups
+        assertTrue(groups.containsKey("Location unknown"))
+        assertEquals(2, groups["Location unknown"]?.size)
+    }
+
+    @Test
     fun `toggle blacklist and whitelist update repository-backed ui state`() = runTest(dispatcher) {
         val wifiRepository = FakeWifiNetworkRepository()
         val viewModel = createViewModel(repository = wifiRepository)

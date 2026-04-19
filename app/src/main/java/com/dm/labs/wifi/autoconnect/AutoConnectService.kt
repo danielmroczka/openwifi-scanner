@@ -181,8 +181,14 @@ class AutoConnectService : Service() {
                     }
                 } else {
                     val status = checker.getStatus()
+                    val activeNetwork = connectivityManager.activeNetwork
+                    val caps = if (activeNetwork != null) connectivityManager.getNetworkCapabilities(activeNetwork) else null
+
+                    DevLog.d("Monitoring connection status: $status | activeNetwork=$activeNetwork | capabilities=${caps?.let { buildCapabilityString(it) } ?: "null"}")
+
                     when (status) {
                         CaptivePortalStatus.OPEN_INTERNET -> {
+                            DevLog.i("✓ Internet still validated - maintaining connection")
                             pushState(
                                 BackgroundAutoConnectState(
                                     isRunning = true,
@@ -195,8 +201,27 @@ class AutoConnectService : Service() {
                             )
                         }
 
-                        else -> {
+                        CaptivePortalStatus.CAPTIVE_PORTAL -> {
                             val ssid = AutoConnectRuntime.state.value.currentSsid
+                            DevLog.w("✗ Captive portal detected while monitoring")
+                            connector.disconnectCurrentNetwork()
+                            connected = false
+                            ScanLogManager.log("Captive portal detected on $ssid during monitoring. Reconnecting…")
+                            pushState(
+                                BackgroundAutoConnectState(
+                                    isRunning = true,
+                                    attempts = attempts,
+                                    captivePortalDetected = true,
+                                    message = "Captive portal detected. Trying next network…"
+                                )
+                            )
+                        }
+
+                        CaptivePortalStatus.UNKNOWN -> {
+                            val ssid = AutoConnectRuntime.state.value.currentSsid
+                            DevLog.w("⚠ Unknown status detected - network may be validating or disconnected")
+                            DevLog.d("Capability details: VALIDATED=${caps?.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED)}, CAPTIVE_PORTAL=${caps?.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL)}, INTERNET=${caps?.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)}")
+
                             connector.disconnectCurrentNetwork()
                             connected = false
                             ScanLogManager.log("Internet lost on $ssid. Reconnecting…")
@@ -205,7 +230,7 @@ class AutoConnectService : Service() {
                                 BackgroundAutoConnectState(
                                     isRunning = true,
                                     attempts = attempts,
-                                    captivePortalDetected = status == CaptivePortalStatus.CAPTIVE_PORTAL,
+                                    captivePortalDetected = false,
                                     message = "Internet lost. Trying next open network…"
                                 )
                             )
@@ -344,6 +369,17 @@ class AutoConnectService : Service() {
         ActivityManager.getMyMemoryState(processInfo)
         return processInfo.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND ||
             processInfo.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_VISIBLE
+    }
+
+    private fun buildCapabilityString(caps: android.net.NetworkCapabilities): String {
+        return buildString {
+            append("(")
+            if (caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED)) append("VALIDATED ")
+            if (caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL)) append("CAPTIVE_PORTAL ")
+            if (caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)) append("INTERNET ")
+            if (caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED)) append("NOT_RESTRICTED ")
+            append(")")
+        }
     }
 
     private fun ensureNotificationChannel() {

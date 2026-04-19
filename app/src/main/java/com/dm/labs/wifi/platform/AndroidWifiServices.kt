@@ -16,6 +16,7 @@ import android.net.wifi.WifiNetworkSpecifier
 import android.net.wifi.WifiNetworkSuggestion
 import android.os.Build
 import androidx.annotation.RequiresPermission
+import com.dm.labs.wifi.log.DevLog
 import com.dm.labs.wifi.log.ScanLogManager
 import com.dm.labs.wifi.model.CaptivePortalChecker
 import com.dm.labs.wifi.model.CaptivePortalStatus
@@ -165,6 +166,7 @@ class AndroidWifiConnector(context: Context) : WifiConnector {
             // Wait for the system to pick up the suggestion and connect
             val connected = waitForConnection(ssid)
             if (connected) {
+                ScanLogManager.log("Successfully connected to $ssid via suggestion")
                 return ConnectAttemptResult.Connected
             }
 
@@ -180,14 +182,26 @@ class AndroidWifiConnector(context: Context) : WifiConnector {
 
     private suspend fun waitForConnection(expectedSsid: String): Boolean {
         // Give the system time to auto-connect via the suggestion
-        repeat(10) {
+        // Extended timeout: try up to 40 seconds (20 iterations × 2 seconds)
+        // Some devices take 36+ seconds to connect
+        DevLog.i("   → Waiting for system to auto-connect (checking every 2 seconds, max 40 seconds)…")
+        repeat(20) { iteration ->
             if (isConnectedToExpectedWifi(expectedSsid)) {
+                DevLog.i("   ✓ Successfully connected via suggestion on attempt ${iteration + 1} (${(iteration + 1) * 2} seconds)")
                 return true
             }
-            delay(2_000)
+            if (iteration < 19) {
+                DevLog.d("   ↳ Check #${iteration + 1}/20: not connected yet, waiting…")
+                delay(2_000)
+            }
         }
 
-        return isConnectedToExpectedWifi(expectedSsid)
+        if (isConnectedToExpectedWifi(expectedSsid)) {
+            DevLog.i("   ✓ Connected on final check")
+            return true
+        }
+        DevLog.w("   ✗ Suggestion connection timeout after 40 seconds")
+        return false
     }
 
     private fun isConnectedToExpectedWifi(expectedSsid: String): Boolean {
@@ -219,6 +233,7 @@ class AndroidWifiConnector(context: Context) : WifiConnector {
 
 
     private suspend fun connectViaSpecifier(ssid: String): ConnectAttemptResult {
+        DevLog.i("   → Fallback: Using WifiNetworkSpecifier (may show system dialog)…")
         val specifier = WifiNetworkSpecifier.Builder()
             .setSsid(ssid)
             .build()
@@ -228,6 +243,7 @@ class AndroidWifiConnector(context: Context) : WifiConnector {
             .setNetworkSpecifier(specifier)
             .build()
 
+        DevLog.i("   → Requesting network connection with specifier (20 second timeout)…")
         val outcome = withTimeoutOrNull(20_000) {
             suspendCancellableCoroutine<ConnectAttemptResult> { continuation ->
                 lateinit var callback: ConnectivityManager.NetworkCallback
@@ -244,6 +260,7 @@ class AndroidWifiConnector(context: Context) : WifiConnector {
 
                 callback = object : ConnectivityManager.NetworkCallback() {
                     override fun onAvailable(network: Network) {
+                        DevLog.i("   ✓ Network AVAILABLE callback received")
                         activeCallback = callback
                         connectivityManager.bindProcessToNetwork(network)
                         if (!continuation.isCompleted) {
@@ -252,10 +269,12 @@ class AndroidWifiConnector(context: Context) : WifiConnector {
                     }
 
                     override fun onUnavailable() {
+                        DevLog.w("   ✗ Network UNAVAILABLE callback")
                         failAndCleanup(ConnectAttemptResult.Failed("Network unavailable."))
                     }
 
                     override fun onLost(network: Network) {
+                        DevLog.w("   ✗ Network LOST callback")
                         connectivityManager.bindProcessToNetwork(null)
                         failAndCleanup(ConnectAttemptResult.Failed("Connection was lost."))
                     }
@@ -272,7 +291,16 @@ class AndroidWifiConnector(context: Context) : WifiConnector {
             }
         }
 
-        return outcome ?: ConnectAttemptResult.Failed("Timed out while trying to connect.")
+        return when (outcome) {
+            null -> {
+                DevLog.w("   ✗ Specifier connection timed out after 20 seconds")
+                ConnectAttemptResult.Failed("Timed out while trying to connect.")
+            }
+            else -> {
+                DevLog.i("   ✓ Specifier connection completed: $outcome")
+                outcome
+            }
+        }
     }
 
     override fun disconnectCurrentNetwork() {
@@ -291,21 +319,71 @@ class AndroidWifiConnector(context: Context) : WifiConnector {
 class AndroidCaptivePortalChecker(context: Context) : CaptivePortalChecker {
     private val connectivityManager: ConnectivityManager =
         context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+    private val log = com.dm.labs.wifi.log.DevLog  // Direct access for detailed logging
 
     override fun getStatus(): CaptivePortalStatus {
-        val network = connectivityManager.activeNetwork ?: return CaptivePortalStatus.UNKNOWN
-        val caps = connectivityManager.getNetworkCapabilities(network)
-            ?: return CaptivePortalStatus.UNKNOWN
-
-        return when {
-            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL) ->
-                CaptivePortalStatus.CAPTIVE_PORTAL
-
-            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) ->
-                CaptivePortalStatus.OPEN_INTERNET
-
-            else -> CaptivePortalStatus.UNKNOWN
+        val network = connectivityManager.activeNetwork
+        if (network == null) {
+            log.d("⚠ No active network")
+            return CaptivePortalStatus.UNKNOWN
         }
+
+        val caps = connectivityManager.getNetworkCapabilities(network)
+        if (caps == null) {
+            log.d("⚠ No network capabilities available")
+            return CaptivePortalStatus.UNKNOWN
+        }
+
+        // Check for captive portal first (priority)
+        if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL)) {
+            log.d("🔐 Portal capability detected: NET_CAPABILITY_CAPTIVE_PORTAL")
+            return CaptivePortalStatus.CAPTIVE_PORTAL
+        }
+
+        // Check for validated internet
+        if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) {
+            log.d("✓ Internet capability detected: NET_CAPABILITY_VALIDATED")
+            return CaptivePortalStatus.OPEN_INTERNET
+        }
+
+        // Check for internet capability without validation (intermediate state before full validation)
+        if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
+            log.d("↳ Connected but not validated: NET_CAPABILITY_INTERNET (validating…)")
+            return CaptivePortalStatus.UNKNOWN
+        }
+
+        log.d("✗ No relevant capabilities: VALIDATED=${caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)}, CAPTIVE=${caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL)}, INTERNET=${caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)}, NOT_RESTRICTED=${caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED)}")
+        return CaptivePortalStatus.UNKNOWN
     }
 }
 
+/**
+ * Quick connectivity test using HTTP to verify internet without relying on Android's status
+ * Useful when ConnectivityManager reports UNKNOWN but we need to know if internet actually works
+ */
+class QuickConnectivityTester {
+    companion object {
+        private const val CONNECTIVITY_CHECK = "http://connectivitycheck.gstatic.com/generate_204"
+        private const val TIMEOUT_MS = 3_000
+
+        suspend fun testInternetAvailable(): Boolean {
+            return try {
+                val url = java.net.URL(CONNECTIVITY_CHECK)
+                val conn = url.openConnection() as java.net.HttpURLConnection
+                conn.connectTimeout = TIMEOUT_MS
+                conn.readTimeout = TIMEOUT_MS
+                conn.instanceFollowRedirects = false
+
+                try {
+                    val code = conn.responseCode
+                    code == 204 || code == 200  // 204 = no content (success), 200 = OK
+                } finally {
+                    conn.disconnect()
+                }
+            } catch (e: Exception) {
+                com.dm.labs.wifi.log.DevLog.d("HTTP connectivity test failed: ${e.message}")
+                false
+            }
+        }
+    }
+}
